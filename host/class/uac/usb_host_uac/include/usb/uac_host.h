@@ -9,8 +9,6 @@
 #include <wchar.h>
 #include <stdint.h>
 #include "esp_err.h"
-#include "freertos/FreeRTOS.h"
-
 #include "uac.h"
 
 #ifdef __cplusplus
@@ -37,7 +35,8 @@ typedef struct uac_interface *uac_host_device_handle_t;    /*!< Logic Device Han
  * @brief USB UAC HOST Driver event id
 */
 typedef enum {
-    UAC_HOST_DRIVER_EVENT_CONNECTED = 0x00,           /*!< UAC Logic Device has been found in connected USB device (each interface as a separate logic device) */
+    UAC_HOST_DRIVER_EVENT_RX_CONNECTED = 0x00,           /*!< UAC RX Device has been found in connected USB device */
+    UAC_HOST_DRIVER_EVENT_TX_CONNECTED,                  /*!< UAC TX Device has been found in connected USB device */
 } uac_host_driver_event_t;
 
 /**

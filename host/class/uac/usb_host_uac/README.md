@@ -13,7 +13,8 @@ The following steps outline the typical API call pattern of the UAC Class Driver
 1. Install the USB Host Library via `usb_host_install()`
 2. Install the UAC driver via `uac_host_install()`
 3. When the new (logic) UAC device is connected, the driver event callback will be called with USB device address and event:
-    - `UAC_HOST_DRIVER_EVENT_CONNECTED`
+    - `UAC_HOST_DRIVER_EVENT_TX_CONNECTED`
+    - `UAC_HOST_DRIVER_EVENT_RX_CONNECTED`
 4. To open/close the UAC device with USB device address and interface number:
     - `uac_host_device_open()`
     - `uac_host_device_close()`
@@ -37,7 +38,7 @@ The following steps outline the typical API call pattern of the UAC Class Driver
 11. The UAC driver can be uninstalled via `uac_host_uninstall()`
 
 > Note: For physical with both microphone and speaker, the driver will treat it as two separate logic devices.
-> The `UAC_HOST_DRIVER_EVENT_CONNECTED` event will be called twice for the device.
+> The `UAC_HOST_DRIVER_EVENT_TX_CONNECTED` and `UAC_HOST_DRIVER_EVENT_RX_CONNECTED` event will be called for the device.
 
 ## Known issues
 
@@ -45,7 +46,7 @@ The following steps outline the typical API call pattern of the UAC Class Driver
 
 ## Examples
 
-- For an example, refer to [usb_audio_player](./examples/usb_audio_player)
+- For an example, refer to [usb_audio_player](https://github.com/espressif/esp-iot-solution/tree/master/examples/usb/host/usb_audio_player)
 
 ## Supported Devices
 

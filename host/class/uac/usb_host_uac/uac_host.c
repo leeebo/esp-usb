@@ -81,15 +81,19 @@ static const char *TAG = "uac-host";
 #define UAC_SPK_VOLUME_STEP                 ((UAC_SPK_VOLUME_MAX - UAC_SPK_VOLUME_MIN)/100)
 #define INTERFACE_FLAGS_OFFSET              (16)
 #define FLAG_INTERFACE_WAIT_USER_DELETE     (1 << INTERFACE_FLAGS_OFFSET)
+#define UAC_EP_DIR_IN                       (0x80)
+
 /**
  * @brief UAC Device structure.
  *
  */
 typedef struct uac_host_device {
+    // dynamic values after device opening, should be protected by critical section
     STAILQ_ENTRY(uac_host_device) tailq_entry;      /*!< UAC device queue */
+    uint8_t opened_cnt;                             /*!< Device opened counter */
+    // constant values after device opening
     usb_device_handle_t dev_hdl;                    /*!< USB device handle */
     uint8_t addr;                                   /*!< USB device address */
-    volatile int8_t opened_cnt;                              /*!< Device opened counter */
     SemaphoreHandle_t device_busy;                  /*!< UAC device main mutex */
     SemaphoreHandle_t ctrl_xfer_done;               /*!< Control transfer semaphore */
     usb_transfer_t *ctrl_xfer;                      /*!< Pointer to control transfer buffer */
@@ -109,9 +113,9 @@ typedef struct uac_host_device {
 */
 typedef enum {
     UAC_INTERFACE_STATE_NOT_INITIALIZED = 0x00,     /*!< UAC Interface not initialized */
-    UAC_INTERFACE_STATE_IDLE,                       /*!< UAC Interface has been found in connected USB device */
-    UAC_INTERFACE_STATE_READY,                      /*!< UAC Interface opened and ready to start transfer */
-    UAC_INTERFACE_STATE_ACTIVE,                     /*!< UAC Interface is in use */
+    UAC_INTERFACE_STATE_IDLE,                       /*!< UAC Interface has been opened but not started */
+    UAC_INTERFACE_STATE_READY,                      /*!< UAC Interface has started but stream is suspended */
+    UAC_INTERFACE_STATE_ACTIVE,                     /*!< UAC Interface is streaming */
     UAC_INTERFACE_STATE_MAX
 } uac_iface_state_t;
 
@@ -119,12 +123,14 @@ typedef enum {
  * @brief UAC Interface alternate setting parameters
  */
 typedef struct uac_interface_alt {
+    // variable only change by app operation, protected by mutex
+    uint32_t cur_sampling_freq;                /*!< current sampling frequency */
+    // constant values after interface opening
     uint8_t alt_idx;                           /*!< audio stream alternate setting number */
     uint8_t ep_addr;                           /*!< audio stream endpoint number */
     uint16_t ep_mps;                           /*!< audio stream endpoint max size */
     uint8_t ep_attr;                           /*!< audio stream endpoint attributes */
     uint8_t interval;                          /*!< audio stream endpoint interval */
-    uint32_t cur_sampling_freq;                /*!< current sampling frequency */
     uint8_t connected_terminal;                /*!< connected terminal ID */
     bool freq_ctrl_supported;                  /*!< sampling frequency control supported */
     uac_host_dev_alt_param_t dev_alt_param;    /*!< audio stream alternate setting parameters */
@@ -135,10 +141,17 @@ typedef struct uac_interface_alt {
  *
  */
 typedef struct uac_interface {
+    // dynamic values after interface opening, should be protected by critical section
     STAILQ_ENTRY(uac_interface) tailq_entry;
-    uac_device_t *parent;                      /*!< Parent USB UAC device */
     usb_transfer_t **xfer_list;                /*!< Pointer to transfer list */
     usb_transfer_t **free_xfer_list;           /*!< Pointer to free transfer list */
+    // variable only change by app operation, protected by mutex
+    SemaphoreHandle_t state_mutex;             /*!< UAC device state mutex */
+    uac_iface_state_t state;                   /*!< Interface state */
+    uint32_t flags;                            /*!< Interface flags */
+    uint8_t cur_alt;                           /*!< Current alternate setting (-1) */
+    // constant parameters after interface opening
+    uac_device_t *parent;                      /*!< Parent USB UAC device */
     uint8_t xfer_num;                          /*!< Number of transfers */
     uint8_t packet_num;                        /*!< packets per transfer */
     uint32_t packet_size;                      /*!< size of each packet */
@@ -147,11 +160,8 @@ typedef struct uac_interface {
     RingbufHandle_t ringbuf;                   /*!< Ring buffer for audio data */
     uint32_t ringbuf_size;                     /*!< Ring buffer size */
     uint32_t ringbuf_threshold;                /*!< Ring buffer threshold */
-    uac_iface_state_t state;                   /*!< Interface state */
-    uint8_t cur_alt;                           /*!< Current alternate setting (-1) */
     uac_host_dev_info_t dev_info;              /*!< USB device parameters */
     uac_iface_alt_t *iface_alt;                /*!< audio stream alternate setting */
-    uint32_t flags;                            /*!< Interface flags */
 } uac_iface_t;
 
 /**
@@ -160,14 +170,16 @@ typedef struct uac_interface {
  * This context is created during UAC Host install.
  */
 typedef struct {
+    // dynamic values after UAC Host initialization, should be protected by critical section
     STAILQ_HEAD(devices, uac_host_device) uac_devices_tailq;    /*!< STAILQ of UAC interfaces */
     STAILQ_HEAD(interfaces, uac_interface) uac_ifaces_tailq;    /*!< STAILQ of UAC interfaces */
+    volatile bool end_client_event_handling;                    /*!< Client event handling flag */
+    // constant values after UAC Host initialization
+    bool event_handling_started;                                /*!< Events handler started flag */
     usb_host_client_handle_t client_handle;                     /*!< Client task handle */
     uac_host_driver_event_cb_t user_cb;                         /*!< User application callback */
     void *user_arg;                                             /*!< User application callback args */
-    bool event_handling_started;                                /*!< Events handler started flag */
     SemaphoreHandle_t all_events_handled;                       /*!< Events handler semaphore */
-    volatile bool end_client_event_handling;                    /*!< Client event handling flag */
 } uac_driver_t;
 
 /**
@@ -245,8 +257,8 @@ static esp_err_t _ring_buffer_pop(RingbufHandle_t ringbuf_hdl, uint8_t *buf, siz
 
     memcpy(buf, buf_rcv, *read_bytes);
     vRingbufferReturnItem(ringbuf_hdl, (void *)(buf_rcv));
-    size_t read_bytes2 = 0;
 
+    size_t read_bytes2 = 0;
     if (*read_bytes < req_bytes) {
         buf_rcv = xRingbufferReceiveUpTo(ringbuf_hdl, &read_bytes2, 0, req_bytes - *read_bytes);
         if (buf_rcv) {
@@ -259,13 +271,9 @@ static esp_err_t _ring_buffer_pop(RingbufHandle_t ringbuf_hdl, uint8_t *buf, siz
     return ESP_OK;
 }
 
-// ----------------- USB Event Handler - Internal Task -------------------------
 /**
- * @brief USB Event handler
+ * @brief UAC Host driver event handler internal task
  *
- * Handle all USB related events such as USB host (usbh) events or hub events from USB hardware
- *
- * @param[in] arg   Argument, does not used
  */
 static void event_handler_task(void *arg)
 {
@@ -485,12 +493,41 @@ static esp_err_t uac_host_string_descriptor_copy(wchar_t *dest, const usb_str_de
     return ESP_OK;
 }
 
+/** Lock UAC interface when user tries to change the interface state
+ *
+ * @param[in] iface         Pointer to UAC interface structure
+ * @param[in] timeout_ms    Timeout of trying to take the mutex
+ * @return esp_err_t
+ */
+static inline esp_err_t uac_host_interface_try_lock(uac_iface_t *iface, uint32_t timeout_ms)
+{
+    return (xSemaphoreTake(iface->state_mutex, pdMS_TO_TICKS(timeout_ms)) ? ESP_OK : ESP_ERR_TIMEOUT);
+}
+
+/** Unlock UAC interface when user changes the interface state
+ *
+ * @param[in] iface         Pointer to UAC interface structure
+ * @return esp_err_t
+ */
+static inline esp_err_t uac_host_interface_unlock(uac_iface_t *iface)
+{
+    return (xSemaphoreGive(iface->state_mutex) ? ESP_OK : ESP_FAIL);
+}
+
+/**
+ * @brief Add a new logical device/interface to the UAC driver
+ * @param[in] iface_num     Interface number
+ * @param[out] p_uac_iface  Pointer to the UAC interface handle
+ * @return esp_err_t
+ */
 static esp_err_t uac_host_interface_add(uac_device_t *uac_device, uint8_t iface_num, uac_iface_t **p_uac_iface)
 {
     esp_err_t ret;
     *p_uac_iface = NULL;
     uac_iface_t *uac_iface = calloc(1, sizeof(uac_iface_t));
     UAC_RETURN_ON_FALSE(uac_iface, ESP_ERR_NO_MEM, "Unable to allocate memory");
+    uac_iface->state_mutex = xSemaphoreCreateMutex();
+    UAC_GOTO_ON_FALSE(uac_iface->state_mutex, ESP_ERR_NO_MEM, "Unable to create state mutex");
     const usb_config_desc_t *config_desc = NULL;
     const usb_intf_desc_t *iface_desc = NULL;
     const usb_intf_desc_t *iface_alt_desc = NULL;
@@ -498,7 +535,7 @@ static esp_err_t uac_host_interface_add(uac_device_t *uac_device, uint8_t iface_
     const usb_standard_desc_t *cs_desc = NULL;
 
     usb_host_get_active_config_descriptor(uac_device->dev_hdl, &config_desc);
-    UAC_RETURN_ON_FALSE(config_desc, ESP_ERR_INVALID_STATE, "No active configuration descriptor");
+    UAC_GOTO_ON_FALSE(config_desc, ESP_ERR_INVALID_STATE, "No active configuration descriptor");
     const size_t total_length = config_desc->wTotalLength;
     int iface_alt_offset = 0;
     int iface_alt_idx = 0;
@@ -606,8 +643,8 @@ static esp_err_t uac_host_interface_add(uac_device_t *uac_device, uint8_t iface_
     // Fill descriptor device information
     const usb_device_desc_t *desc;
     usb_device_info_t dev_info;
-    UAC_RETURN_ON_ERROR(usb_host_get_device_descriptor(uac_device->dev_hdl, &desc), "Unable to get device descriptor");
-    UAC_RETURN_ON_ERROR(usb_host_device_info(uac_device->dev_hdl, &dev_info), "Unable to get USB device info");
+    UAC_GOTO_ON_ERROR(usb_host_get_device_descriptor(uac_device->dev_hdl, &desc), "Unable to get device descriptor");
+    UAC_GOTO_ON_ERROR(usb_host_device_info(uac_device->dev_hdl, &dev_info), "Unable to get USB device info");
     // VID, PID
     uac_iface->dev_info.VID = desc->idVendor;
     uac_iface->dev_info.PID = desc->idProduct;
@@ -625,6 +662,9 @@ static esp_err_t uac_host_interface_add(uac_device_t *uac_device, uint8_t iface_
     return ESP_OK;
 
 fail:
+    if (uac_iface && uac_iface->state_mutex) {
+        vSemaphoreDelete(uac_iface->state_mutex);
+    }
     free(uac_iface->iface_alt);
     free(uac_iface);
     return ret;
@@ -641,7 +681,10 @@ fail:
 static esp_err_t uac_host_interface_delete(uac_iface_t *uac_iface)
 {
     uac_iface->state = UAC_INTERFACE_STATE_NOT_INITIALIZED;
+    UAC_ENTER_CRITICAL();
     STAILQ_REMOVE(&s_uac_driver->uac_ifaces_tailq, uac_iface, uac_interface, tailq_entry);
+    UAC_EXIT_CRITICAL();
+    vSemaphoreDelete(uac_iface->state_mutex);
     free(uac_iface->iface_alt);
     free(uac_iface);
     return ESP_OK;
@@ -671,8 +714,18 @@ static esp_err_t uac_host_interface_check(uint8_t addr, const usb_config_desc_t 
         if (iface_desc->bInterfaceClass == USB_CLASS_AUDIO && iface_desc->bInterfaceSubClass == UAC_SUBCLASS_AUDIOSTREAMING) {
             // notify user about the connected Interfaces
             is_uac_interface = true;
-            uac_host_user_device_callback(addr, iface_desc->bInterfaceNumber, UAC_HOST_DRIVER_EVENT_CONNECTED);
             const usb_intf_desc_t *iface_alt_desc = GET_NEXT_INTERFACE_DESC(iface_desc, total_length, iface_offset);
+            int ep_offset = iface_offset;
+            const usb_ep_desc_t *ep_desc = usb_parse_endpoint_descriptor_by_index(iface_alt_desc, 0, total_length, &ep_offset);
+            if (ep_desc == NULL) {
+                ESP_LOGW(TAG, "No endpoint descriptor found");
+            } else if (ep_desc->bEndpointAddress & UAC_EP_DIR_IN) {
+                // notify user about the connected Interfaces
+                uac_host_user_device_callback(addr, iface_desc->bInterfaceNumber, UAC_HOST_DRIVER_EVENT_RX_CONNECTED);
+            } else {
+                // notify user about the connected Interfaces
+                uac_host_user_device_callback(addr, iface_desc->bInterfaceNumber, UAC_HOST_DRIVER_EVENT_TX_CONNECTED);
+            }
             // Skip all alternate settings belonging to the current interface
             while (iface_alt_desc != NULL) {
                 // Check if the alternate setting is for the same interface
@@ -691,11 +744,10 @@ static esp_err_t uac_host_interface_check(uint8_t addr, const usb_config_desc_t 
 }
 
 /**
- * @brief UAC Host initialize device attempt
+ * @brief Handler for USB device connected event
  *
  * @param[in] addr   USB device physical address
- * @return true USB device contain UAC Interface and device was initialized
- * @return false USB does not contain UAC Interface
+ * @return esp_err_t
  */
 static esp_err_t _uac_host_device_connected(uint8_t addr)
 {
@@ -751,7 +803,7 @@ static esp_err_t uac_host_interface_shutdown(uac_host_device_handle_t uac_dev_ha
 }
 
 /**
- * @brief Deinit USB device by handle
+ * @brief Handler for USB device disconnected event
  *
  * @param[in] dev_hdl   USB device handle
  * @return esp_err_t
@@ -795,7 +847,7 @@ static void client_event_cb(const usb_host_client_event_msg_t *event, void *arg)
 }
 
 /**
- * @brief UAC Host release Interface and free transfer, change state to IDLE
+ * @brief UAC Host release Interface and free transfers, change state to IDLE
  *
  * @param[in] iface       Pointer to Interface structure,
  * @return esp_err_t
@@ -890,7 +942,7 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
             uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_RX_DONE);
         }
 
-        // if ringbuffer overflow (user not read in above callback), the data will be dropped
+        // if ringbuffer overflow (happens if user not read in above callback), the data will be dropped
         data_len = _ring_buffer_get_len(iface->ringbuf);
         if (data_len + in_xfer->actual_num_bytes > iface->ringbuf_size) {
             ESP_LOGD(TAG, "RX Ringbuffer overflow");
@@ -973,6 +1025,7 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
             }
         } else {
             // add the transfer to free list
+            UAC_ENTER_CRITICAL();
             for (int i = 0; i < iface->xfer_num; i++) {
                 if (iface->xfer_list[i] == out_xfer) {
                     iface->free_xfer_list[i] = out_xfer;
@@ -980,6 +1033,7 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
                     break;
                 }
             }
+            UAC_EXIT_CRITICAL();
             // Notify user send done
             uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TX_DONE);
         }
@@ -992,6 +1046,7 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
         return;
     default:
         // Any other error, add the transfer to free list
+        UAC_ENTER_CRITICAL();
         for (int i = 0; i < iface->xfer_num; i++) {
             if (iface->xfer_list[i] == out_xfer) {
                 iface->free_xfer_list[i] = out_xfer;
@@ -999,6 +1054,7 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
                 break;
             }
         }
+        UAC_EXIT_CRITICAL();
         break;
     }
 
@@ -1008,7 +1064,7 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
 }
 
 /**
- * @brief Suspend active interface
+ * @brief Suspend active interface, the interface will be in READY state
  *
  * @param[in] iface       Pointer to Interface structure
  * @return esp_err_t
@@ -1035,15 +1091,17 @@ static esp_err_t uac_host_interface_suspend(uac_iface_t *iface)
     UAC_RETURN_ON_ERROR(usb_host_endpoint_halt(iface->parent->dev_hdl, ep_addr), "Unable to HALT EP");
     UAC_RETURN_ON_ERROR(usb_host_endpoint_flush(iface->parent->dev_hdl, ep_addr), "Unable to FLUSH EP");
     usb_host_endpoint_clear(iface->parent->dev_hdl, ep_addr);
+    _ring_buffer_flush(iface->ringbuf);
 
     // add all the transfer to free list
+    UAC_ENTER_CRITICAL();
     for (int i = 0; i < iface->xfer_num; i++) {
         if (iface->xfer_list[i]) {
             iface->free_xfer_list[i] = iface->xfer_list[i];
             iface->xfer_list[i] = NULL;
         }
     }
-    _ring_buffer_flush(iface->ringbuf);
+    UAC_EXIT_CRITICAL();
     // Change state
     iface->state = UAC_INTERFACE_STATE_READY;
 
@@ -1051,7 +1109,7 @@ static esp_err_t uac_host_interface_suspend(uac_iface_t *iface)
 }
 
 /**
- * @brief Resume suspended interface
+ * @brief Resume suspended interface, the interface will be in ACTIVE state
  *
  * @param[in] iface       Pointer to Interface structure
  * @return esp_err_t
@@ -1121,6 +1179,14 @@ static esp_err_t uac_host_interface_resume(uac_iface_t *iface)
     return ESP_OK;
 }
 
+/**
+ * @brief Add UAC physical device to the list
+ * @param[in] addr          USB device address
+ * @param[in] dev_hdl       USB device handle
+ * @param[in] config_desc   Pointer to Configuration Descriptor
+ * @param[out] uac_device_handle  Pointer to UAC device handle
+ * @return esp_err_t
+ */
 static esp_err_t _uac_host_device_add(uint8_t addr, usb_device_handle_t dev_hdl, const usb_config_desc_t *config_desc, uac_device_t **uac_device_handle)
 {
     assert(config_desc);
@@ -1250,9 +1316,9 @@ static esp_err_t _uac_host_device_add(uint8_t addr, usb_device_handle_t dev_hdl,
     // Allocate control transfer buffer
     UAC_GOTO_ON_ERROR(usb_host_transfer_alloc(64, 0, &uac_device->ctrl_xfer), "Unable to allocate transfer buffer");
 
-    UAC_ENTER_CRITICAL();
     UAC_GOTO_ON_FALSE_CRITICAL(s_uac_driver, ESP_ERR_INVALID_STATE);
     UAC_GOTO_ON_FALSE_CRITICAL(s_uac_driver->client_handle, ESP_ERR_INVALID_STATE);
+    UAC_ENTER_CRITICAL();
     STAILQ_INSERT_TAIL(&s_uac_driver->uac_devices_tailq, uac_device, tailq_entry);
     UAC_EXIT_CRITICAL();
 
@@ -1267,6 +1333,11 @@ fail:
     return ret;
 }
 
+/**
+ * @brief Remove UAC physical device from the list
+ * @param[in] uac_device    Pointer to UAC device structure
+ * @return esp_err_t
+ */
 static esp_err_t _uac_host_device_delete(uac_device_t *uac_device)
 {
     UAC_RETURN_ON_INVALID_ARG(uac_device);
@@ -1299,7 +1370,7 @@ static esp_err_t _uac_host_device_delete(uac_device_t *uac_device)
  * @param[in] timeout_ms    Timeout of trying to take the mutex
  * @return esp_err_t
  */
-static inline esp_err_t uac_device_try_lock(uac_device_t *uac_device, uint32_t timeout_ms)
+static inline esp_err_t _uac_host_device_try_lock(uac_device_t *uac_device, uint32_t timeout_ms)
 {
     return (xSemaphoreTake(uac_device->device_busy, pdMS_TO_TICKS(timeout_ms)) ? ESP_OK : ESP_ERR_TIMEOUT);
 }
@@ -1310,7 +1381,7 @@ static inline esp_err_t uac_device_try_lock(uac_device_t *uac_device, uint32_t t
  * @param[in] timeout_ms    Timeout of trying to take the mutex
  * @return esp_err_t
  */
-static inline void uac_device_unlock(uac_device_t *uac_device)
+static inline void _uac_host_device_unlock(uac_device_t *uac_device)
 {
     xSemaphoreGive(uac_device->device_busy);
 }
@@ -1381,7 +1452,7 @@ static esp_err_t uac_cs_request_set(uac_device_t *uac_device, const uac_cs_reque
     UAC_RETURN_ON_INVALID_ARG(uac_device);
     UAC_RETURN_ON_INVALID_ARG(uac_device->ctrl_xfer);
 
-    UAC_RETURN_ON_ERROR(uac_device_try_lock(uac_device, DEFAULT_CTRL_XFER_TIMEOUT_MS), "UAC Device is busy by other task");
+    UAC_RETURN_ON_ERROR(_uac_host_device_try_lock(uac_device, DEFAULT_CTRL_XFER_TIMEOUT_MS), "UAC Device is busy by other task");
 
     usb_setup_packet_t *setup = (usb_setup_packet_t *)ctrl_xfer->data_buffer;
 
@@ -1402,11 +1473,18 @@ static esp_err_t uac_cs_request_set(uac_device_t *uac_device, const uac_cs_reque
 
     ret = uac_control_transfer(uac_device, USB_SETUP_PACKET_SIZE + setup->wLength, DEFAULT_CTRL_XFER_TIMEOUT_MS);
 
-    uac_device_unlock(uac_device);
+    _uac_host_device_unlock(uac_device);
 
     return ret;
 }
 
+/**
+ * @brief UAC class specific request - Set Endpoint Frequency
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] ep_addr     Endpoint address
+ * @param[in] freq        Frequency to set
+ * @return esp_err_t
+ */
 static esp_err_t uac_cs_request_set_ep_frequency(uac_iface_t *iface, uint8_t ep_addr, uint32_t freq)
 {
     uint8_t tmp[3] = { 0, 0, 0 };
@@ -1427,6 +1505,12 @@ static esp_err_t uac_cs_request_set_ep_frequency(uac_iface_t *iface, uint8_t ep_
     return uac_cs_request_set(iface->parent, &set_freq);
 }
 
+/**
+ * @brief UAC class specific request - Set Volume
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] volume      Volume to set, db
+ * @return esp_err_t
+ */
 static esp_err_t uac_cs_request_set_volume(uac_iface_t *iface, uint32_t volume)
 {
     uint8_t feature_unit = iface->parent->feature_unit[iface->dev_info.type];
@@ -1461,6 +1545,12 @@ static esp_err_t uac_cs_request_set_volume(uac_iface_t *iface, uint32_t volume)
     return ret;
 }
 
+/**
+ * @brief UAC class specific request - Set Mute
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] mute        True to mute, false to unmute
+ * @return esp_err_t
+ */
 static esp_err_t uac_cs_request_set_mute(uac_iface_t *iface, bool mute)
 {
     uint8_t feature_unit = iface->parent->feature_unit[iface->dev_info.type];
@@ -1505,6 +1595,7 @@ esp_err_t uac_host_install(const uac_host_driver_config_t *config)
     if (config->create_background_task) {
         UAC_RETURN_ON_FALSE(config->stack_size != 0, ESP_ERR_INVALID_ARG, "Wrong stack size value");
         UAC_RETURN_ON_FALSE(config->task_priority != 0, ESP_ERR_INVALID_ARG, "Wrong task priority value");
+        UAC_RETURN_ON_FALSE(config->core_id < 2, ESP_ERR_INVALID_ARG, "Wrong core id value");
     }
 
     uac_driver_t *driver = heap_caps_calloc(1, sizeof(uac_driver_t), MALLOC_CAP_DEFAULT);
@@ -1558,6 +1649,7 @@ esp_err_t uac_host_uninstall(void)
     // Make sure that no uac device is registered
     UAC_ENTER_CRITICAL();
     UAC_RETURN_ON_FALSE_CRITICAL(!s_uac_driver->end_client_event_handling, ESP_ERR_INVALID_STATE);
+    // assert that not all devices and interfaces are closed before uninstalling
     UAC_RETURN_ON_FALSE_CRITICAL(STAILQ_EMPTY(&s_uac_driver->uac_devices_tailq), ESP_ERR_INVALID_STATE);
     UAC_RETURN_ON_FALSE_CRITICAL(STAILQ_EMPTY(&s_uac_driver->uac_ifaces_tailq), ESP_ERR_INVALID_STATE);
     s_uac_driver->end_client_event_handling = true;
@@ -1578,17 +1670,16 @@ esp_err_t uac_host_uninstall(void)
 esp_err_t uac_host_device_open(const uac_host_device_config_t *config, uac_host_device_handle_t *uac_dev_handle)
 {
     UAC_RETURN_ON_INVALID_ARG(uac_dev_handle);
+    UAC_RETURN_ON_INVALID_ARG(config);
     *uac_dev_handle = NULL;
 
-    ESP_LOGD(TAG, "Open Device addr %d, iface %d", config->addr, config->iface_num);
-
     UAC_RETURN_ON_FALSE(s_uac_driver, ESP_ERR_INVALID_STATE, "UAC Driver is not installed");
-    UAC_RETURN_ON_INVALID_ARG(config);
     UAC_RETURN_ON_FALSE(config->addr, ESP_ERR_INVALID_ARG, "Invalid device address");
     UAC_RETURN_ON_FALSE(config->iface_num, ESP_ERR_INVALID_ARG, "Invalid interface number");
     UAC_RETURN_ON_FALSE(config->buffer_size, ESP_ERR_INVALID_ARG, "Invalid buffer size");
     UAC_RETURN_ON_FALSE(config->buffer_size > config->buffer_threshold, ESP_ERR_INVALID_ARG, "Invalid buffer threshold");
 
+    ESP_LOGD(TAG, "Open Device addr %d, iface %d", config->addr, config->iface_num);
     // Check if the logic device/interface is already added
     uac_iface_t *uac_iface = get_interface_by_addr(config->addr, config->iface_num);
     if (uac_iface) {
@@ -1598,34 +1689,53 @@ esp_err_t uac_host_device_open(const uac_host_device_config_t *config, uac_host_
     }
 
     // Check if the physical device is already added
+    esp_err_t ret;
     uac_device_t *uac_device = get_uac_device_by_addr(config->addr);
+    bool new_device = false;
+    usb_device_handle_t dev_hdl = NULL;
     if (!uac_device) {
-        usb_device_handle_t dev_hdl;
-        UAC_RETURN_ON_ERROR(usb_host_device_open(s_uac_driver->client_handle, config->addr, &dev_hdl), "Unable to open USB device");
+        UAC_GOTO_ON_ERROR(usb_host_device_open(s_uac_driver->client_handle, config->addr, &dev_hdl), "Unable to open USB device");
         ESP_LOGD(TAG, "line %d, Open Device addr %d", __LINE__, config->addr);
         const usb_config_desc_t *config_desc;
-        UAC_RETURN_ON_ERROR(usb_host_get_active_config_descriptor(dev_hdl, &config_desc), "Unable to get active config descriptor");
+        UAC_GOTO_ON_ERROR(usb_host_get_active_config_descriptor(dev_hdl, &config_desc), "Unable to get active config descriptor");
         // Proceed, add UAC device to the list, parse device params from descriptors
-        UAC_RETURN_ON_ERROR(_uac_host_device_add(config->addr, dev_hdl, config_desc, &uac_device), "Unable to add UAC device");
+        UAC_GOTO_ON_ERROR(_uac_host_device_add(config->addr, dev_hdl, config_desc, &uac_device), "Unable to add UAC device");
+        new_device = true;
         uac_device->opened_cnt = 0;
     }
 
-    uac_device->opened_cnt++;
-    UAC_RETURN_ON_ERROR(uac_host_interface_add(uac_device, config->iface_num, &uac_iface), "Unable to add interface");
+    UAC_GOTO_ON_ERROR(uac_host_interface_add(uac_device, config->iface_num, &uac_iface), "Unable to add interface");
 
     // Save UAC Interface callback
     uac_iface->user_cb = config->callback;
     uac_iface->user_cb_arg = config->callback_arg;
     // create a ringbuffer for the incoming/outgoing data
     uac_iface->ringbuf = xRingbufferCreate(config->buffer_size, RINGBUF_TYPE_BYTEBUF);
-    UAC_RETURN_ON_FALSE(uac_iface->ringbuf, ESP_ERR_NO_MEM, "Unable to create ringbuffer");
+    UAC_GOTO_ON_FALSE(uac_iface->ringbuf, ESP_ERR_NO_MEM, "Unable to create ringbuffer");
     uac_iface->ringbuf_size = config->buffer_size;
     // if the threshold is not set, set it to 25% of the buffer size
     uac_iface->ringbuf_threshold = config->buffer_threshold ? config->buffer_threshold : config->buffer_size / 4;
     uac_iface->state = UAC_INTERFACE_STATE_IDLE;
     *uac_dev_handle = (uac_host_device_handle_t)uac_iface;
-
+    UAC_ENTER_CRITICAL();
+    uac_device->opened_cnt++;
+    UAC_EXIT_CRITICAL();
     return ESP_OK;
+
+fail:
+    if (uac_iface) {
+        uac_host_interface_delete(uac_iface);
+    }
+    if (new_device) {
+        _uac_host_device_delete(uac_device);
+    }
+    if (dev_hdl) {
+        usb_host_device_close(s_uac_driver->client_handle, dev_hdl);
+    }
+    if (uac_iface->ringbuf) {
+        vRingbufferDelete(uac_iface->ringbuf);
+    }
+    return ret;
 }
 
 esp_err_t uac_host_device_close(uac_host_device_handle_t uac_dev_handle)
@@ -1633,41 +1743,62 @@ esp_err_t uac_host_device_close(uac_host_device_handle_t uac_dev_handle)
     uac_iface_t *uac_iface = get_iface_by_handle(uac_dev_handle);
     UAC_RETURN_ON_INVALID_ARG(uac_iface);
 
+    esp_err_t ret = ESP_OK;
     ESP_LOGD(TAG, "Close addr %d, iface %d, state %d", uac_iface->dev_info.addr, uac_iface->dev_info.iface_num, uac_iface->state);
 
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(uac_iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "UAC Interface is busy by other task");
     if (UAC_INTERFACE_STATE_ACTIVE == uac_iface->state) {
-        UAC_RETURN_ON_ERROR(uac_host_interface_suspend(uac_iface), "Unable to disable UAC Interface");
+        UAC_GOTO_ON_ERROR(uac_host_interface_suspend(uac_iface), "Unable to disable UAC Interface");
     }
 
     if (UAC_INTERFACE_STATE_READY == uac_iface->state) {
-        UAC_RETURN_ON_ERROR(uac_host_interface_release_and_free_transfer(uac_iface), "Unable to release UAC Interface");
-    }
-
-    if (uac_iface->ringbuf) {
-        vRingbufferDelete(uac_iface->ringbuf);
-        uac_iface->ringbuf = NULL;
+        UAC_GOTO_ON_ERROR(uac_host_interface_release_and_free_transfer(uac_iface), "Unable to release UAC Interface");
     }
 
     // Wait for user delete
     if (FLAG_INTERFACE_WAIT_USER_DELETE & uac_iface->flags) {
+        uac_host_interface_unlock(uac_iface);
         return ESP_OK;
     }
 
+    UAC_ENTER_CRITICAL();
     if (--uac_iface->parent->opened_cnt == 0) {
-        UAC_RETURN_ON_ERROR(usb_host_device_close(s_uac_driver->client_handle, uac_iface->parent->dev_hdl), "Unable to close USB device");
+        UAC_EXIT_CRITICAL();
+        UAC_GOTO_ON_ERROR(usb_host_device_close(s_uac_driver->client_handle, uac_iface->parent->dev_hdl), "Unable to close USB device");
         ESP_LOGD(TAG, "line %d, Close Device addr %d", __LINE__, uac_iface->parent->addr);
-        UAC_RETURN_ON_ERROR(_uac_host_device_delete(uac_iface->parent), "Unable to delete UAC device");
+        UAC_GOTO_ON_ERROR(_uac_host_device_delete(uac_iface->parent), "Unable to delete UAC device");
         uac_iface->parent = NULL;
+        UAC_ENTER_CRITICAL();
+    }
+    UAC_EXIT_CRITICAL();
+
+    // To delete the ringbuffer safely
+    // We should unblock the task that is waiting for the ringbuffer
+    if (uac_iface->ringbuf) {
+        if (uac_iface->dev_info.type == UAC_STREAM_RX) {
+            // Unblock the task that is waiting for read from the ringbuffer
+            uint8_t dummy = 0;
+            xRingbufferSend(uac_iface->ringbuf, &dummy, sizeof(dummy), 0);
+        } else {
+            // Unblock the task that is waiting for the ringbuffer
+            _ring_buffer_flush(uac_iface->ringbuf);
+        }
+        // Wait 10 ms for low priority task to unblock
+        vTaskDelay(pdMS_TO_TICKS(10));
+        vRingbufferDelete(uac_iface->ringbuf);
+        uac_iface->ringbuf = NULL;
     }
 
     uac_iface->user_cb = NULL;
     uac_iface->user_cb_arg = NULL;
     ESP_LOGD(TAG, "User Remove addr %d, iface %d from list", uac_iface->dev_info.addr, uac_iface->dev_info.iface_num);
-    UAC_ENTER_CRITICAL();
     uac_host_interface_delete(uac_iface);
-    UAC_EXIT_CRITICAL();
 
     return ESP_OK;
+
+fail:
+    uac_host_interface_unlock(uac_iface);
+    return ret;
 }
 
 esp_err_t uac_host_handle_events(uint32_t timeout)
@@ -1675,10 +1806,13 @@ esp_err_t uac_host_handle_events(uint32_t timeout)
     UAC_RETURN_ON_FALSE(s_uac_driver != NULL, ESP_ERR_INVALID_STATE, "UAC Driver is not installed");
     s_uac_driver->event_handling_started = true;
     esp_err_t ret = usb_host_client_handle_events(s_uac_driver->client_handle, timeout);
+    UAC_ENTER_CRITICAL();
     if (s_uac_driver->end_client_event_handling) {
+        UAC_EXIT_CRITICAL();
         xSemaphoreGive(s_uac_driver->all_events_handled);
         return ESP_FAIL;
     }
+    UAC_EXIT_CRITICAL();
     return ret;
 }
 
@@ -1732,12 +1866,16 @@ esp_err_t uac_host_device_start(uac_host_device_handle_t uac_dev_handle, const u
     UAC_RETURN_ON_FALSE(stream_config->channels, ESP_ERR_INVALID_ARG, "Invalid number of channels");
     UAC_RETURN_ON_FALSE(stream_config->sample_freq, ESP_ERR_INVALID_ARG, "Invalid sample frequency");
 
+    // get the mutex first to change the device/interface state
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE == iface->state || UAC_INTERFACE_STATE_READY == iface->state) {
+        uac_host_interface_unlock(iface);
         return ESP_OK;
     }
 
-    UAC_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
-    UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_IDLE == iface->state), ESP_ERR_INVALID_STATE, "Interface wrong state");
+    esp_err_t ret = ESP_OK;
+    bool iface_claimed = false;
+    UAC_GOTO_ON_FALSE((UAC_INTERFACE_STATE_IDLE == iface->state), ESP_ERR_INVALID_STATE, "Interface wrong state");
 
     // check if any alt setting meets the channels, sample frequency and bit resolution requirements
     // if not exist, return error. If exist, claim the interface and prepare transfer
@@ -1763,7 +1901,7 @@ esp_err_t uac_host_device_start(uac_host_device_handle_t uac_dev_handle, const u
         }
     }
 
-    UAC_RETURN_ON_FALSE(iface->cur_alt != UINT8_MAX, ESP_ERR_NOT_FOUND, "No suitable alt setting found");
+    UAC_GOTO_ON_FALSE(iface->cur_alt != UINT8_MAX, ESP_ERR_NOT_FOUND, "No suitable alt setting found");
 
     // enqueue multiple transfers to make sure the data is not lost
     iface->xfer_num = CONFIG_UAC_NUM_ISOC_URBS;
@@ -1778,17 +1916,20 @@ esp_err_t uac_host_device_start(uac_host_device_handle_t uac_dev_handle, const u
     assert(iface->packet_size <= iface->iface_alt[iface->cur_alt].ep_mps);
 
     // Claim Interface and prepare transfer
-    esp_err_t ret = ESP_OK;
-    UAC_RETURN_ON_ERROR(uac_host_interface_claim_and_prepare_transfer(iface), "Unable to claim Interface");
+    UAC_GOTO_ON_ERROR(uac_host_interface_claim_and_prepare_transfer(iface), "Unable to claim Interface");
+    iface_claimed = true;
 
     if (!(iface->flags & FLAG_STREAM_SUSPEND_AFTER_START)) {
         UAC_GOTO_ON_ERROR(uac_host_interface_resume(iface), "Unable to enable UAC Interface");
     }
-
+    uac_host_interface_unlock(iface);
     return ESP_OK;
 
 fail:
-    uac_host_interface_release_and_free_transfer(iface);
+    if (iface_claimed) {
+        uac_host_interface_release_and_free_transfer(iface);
+    }
+    uac_host_interface_unlock(iface);
     return ret;
 }
 
@@ -1796,45 +1937,68 @@ esp_err_t uac_host_device_suspend(uac_host_device_handle_t uac_dev_handle)
 {
     uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
     UAC_RETURN_ON_INVALID_ARG(iface);
+
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_READY == iface->state) {
+        uac_host_interface_unlock(iface);
         return ESP_OK;
     }
-    UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state), ESP_ERR_INVALID_STATE, "device not active");
+    esp_err_t ret = ESP_OK;
+    UAC_GOTO_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state), ESP_ERR_INVALID_STATE, "device not active");
+    UAC_GOTO_ON_ERROR(uac_host_interface_suspend(iface), "Unable to disable UAC Interface");
 
-    UAC_RETURN_ON_ERROR(uac_host_interface_suspend(iface), "Unable to disable UAC Interface");
-
+    uac_host_interface_unlock(iface);
     return ESP_OK;
+
+fail:
+    uac_host_interface_unlock(iface);
+    return ret;
 }
 
 esp_err_t uac_host_device_resume(uac_host_device_handle_t uac_dev_handle)
 {
     uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
     UAC_RETURN_ON_INVALID_ARG(iface);
+
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE == iface->state) {
+        uac_host_interface_unlock(iface);
         return ESP_OK;
     }
-    UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_READY == iface->state), ESP_ERR_INVALID_STATE, "device not ready");
 
-    UAC_RETURN_ON_ERROR(uac_host_interface_resume(iface), "Unable to enable UAC Interface");
+    esp_err_t ret = ESP_OK;
+    UAC_GOTO_ON_FALSE((UAC_INTERFACE_STATE_READY == iface->state), ESP_ERR_INVALID_STATE, "device not ready");
+    UAC_GOTO_ON_ERROR(uac_host_interface_resume(iface), "Unable to enable UAC Interface");
 
+    uac_host_interface_unlock(iface);
     return ESP_OK;
+
+fail:
+    uac_host_interface_unlock(iface);
+    return ret;
 }
 
 esp_err_t uac_host_device_stop(uac_host_device_handle_t uac_dev_handle)
 {
     uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
-
     UAC_RETURN_ON_INVALID_ARG(iface);
 
+    esp_err_t ret = ESP_OK;
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE == iface->state) {
-        UAC_RETURN_ON_ERROR(uac_host_interface_suspend(iface), "Unable to disable UAC Interface");
+        UAC_GOTO_ON_ERROR(uac_host_interface_suspend(iface), "Unable to disable UAC Interface");
     }
 
     if (UAC_INTERFACE_STATE_READY == iface->state) {
-        UAC_RETURN_ON_ERROR(uac_host_interface_release_and_free_transfer(iface), "Unable to release UAC Interface");
+        UAC_GOTO_ON_ERROR(uac_host_interface_release_and_free_transfer(iface), "Unable to release UAC Interface");
     }
 
+    uac_host_interface_unlock(iface);
     return ESP_OK;
+
+fail:
+    uac_host_interface_unlock(iface);
+    return ret;
 }
 
 esp_err_t uac_host_device_read(uac_host_device_handle_t uac_dev_handle, uint8_t *data, uint32_t size, uint32_t *bytes_read, uint32_t timeout)
@@ -1844,9 +2008,12 @@ esp_err_t uac_host_device_read(uac_host_device_handle_t uac_dev_handle, uint8_t 
     UAC_RETURN_ON_INVALID_ARG(data);
     UAC_RETURN_ON_INVALID_ARG(bytes_read);
 
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE != iface->state) {
+        uac_host_interface_unlock(iface);
         return ESP_ERR_INVALID_STATE;
     }
+    uac_host_interface_unlock(iface);
 
     size_t data_len = _ring_buffer_get_len(iface->ringbuf);
     if (data_len > size) {
@@ -1868,9 +2035,12 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
     UAC_RETURN_ON_INVALID_ARG(iface);
     UAC_RETURN_ON_INVALID_ARG(data);
 
+    UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE != iface->state) {
+        uac_host_interface_unlock(iface);
         return ESP_ERR_INVALID_STATE;
     }
+    uac_host_interface_unlock(iface);
 
     esp_err_t ret = _ring_buffer_push(iface->ringbuf, data, size, timeout);
 
@@ -1881,19 +2051,30 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
 
     // We need to submit the transfer if there is free transfer in the list
     for (int i = 0; i < iface->xfer_num; i++) {
+        UAC_ENTER_CRITICAL();
         if (iface->free_xfer_list[i]) {
             size_t data_len = _ring_buffer_get_len(iface->ringbuf);
             if (data_len == 0) {
-                break;
+                goto exit_critical;
+            }
+            // if interface state changed to inactive during blocking write
+            // we need to return invalid state to safely exit the write function
+            if (UAC_INTERFACE_STATE_ACTIVE != iface->state) {
+                ret = ESP_ERR_INVALID_STATE;
+                goto exit_critical;
             }
             iface->xfer_list[i] = iface->free_xfer_list[i];
             iface->free_xfer_list[i] = NULL;
             iface->xfer_list[i]->status = USB_TRANSFER_STATUS_COMPLETED;
+            UAC_EXIT_CRITICAL();
             stream_tx_xfer_done(iface->xfer_list[i]);
+            UAC_ENTER_CRITICAL();
         }
+exit_critical:
+        UAC_EXIT_CRITICAL();
     }
 
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t uac_host_get_device_info(uac_host_device_handle_t uac_dev_handle, uac_host_dev_info_t *uac_dev_info)

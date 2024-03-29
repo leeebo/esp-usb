@@ -5,6 +5,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 set(EXTRA_COMPONENT_DIRS
         ../../usb_host_uac
+        ${EXTRA_COMPONENT_DIRS}
         )
 
 project(test_app_usb_host_uac)

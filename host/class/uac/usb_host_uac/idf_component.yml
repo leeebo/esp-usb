@@ -8,5 +8,3 @@ targets:
   - esp32s2
   - esp32s3
   - esp32p4
-examples:
-  - path: ./examples/usb_audio_player
