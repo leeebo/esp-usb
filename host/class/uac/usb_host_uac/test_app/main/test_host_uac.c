@@ -190,7 +190,7 @@ static void usb_lib_task(void *arg)
  * - Create USB lib task
  * - Install UAC Host driver
  */
-void test_uac_setup()
+void test_uac_setup(void)
 {
     // create a queue to handle events
     s_event_queue = xQueueCreate(16, sizeof(event_queue_t));
@@ -220,7 +220,7 @@ void test_uac_setup()
     ESP_LOGI(TAG, "UAC Class Driver installed");
 }
 
-void test_uac_queue_reset()
+void test_uac_queue_reset(void)
 {
     xQueueReset(s_event_queue);
 }
