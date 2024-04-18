@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -402,8 +402,8 @@ TEST_CASE("test uac rx reading", "[uac_host][rx]")
     };
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_start(uac_device_handle, &stream_config));
     // Most device support mute and volume control. if not, comment out the following two lines
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_VOLUME, (void *)80));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(uac_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(uac_device_handle, 80));
 
     uint8_t *rx_buffer = (uint8_t *)calloc(1, buffer_threshold);
     TEST_ASSERT_NOT_NULL(rx_buffer);
@@ -435,7 +435,7 @@ TEST_CASE("test uac rx reading", "[uac_host][rx]")
     }
 exit_rx:
     ESP_LOGI(TAG, "Stop reading data from MIC");
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_MUTE, (void *)1));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(uac_device_handle, 1));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_close(uac_device_handle));
 
     free(rx_buffer);
@@ -530,8 +530,8 @@ TEST_CASE("test uac tx writing", "[uac_host][tx]")
     // invalid operate
     uint32_t volume = 10;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, uac_host_device_write(uac_device_handle, (uint8_t *)tx_buffer, tx_size, 0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_VOLUME, (void *)volume));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(uac_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(uac_device_handle, volume));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_resume(uac_device_handle));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_write(uac_device_handle, (uint8_t *)tx_buffer, tx_size, 0));
 
@@ -548,7 +548,7 @@ TEST_CASE("test uac tx writing", "[uac_host][tx]")
                 if ((uint32_t)(s_buffer + offset_size) > (uint32_t)wav_file_end) {
                     s_buffer = (uint16_t *)(wav_file_start + 44);
                     volume += 20;
-                    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_VOLUME, (void *)volume));
+                    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(uac_device_handle, volume > 100 ? 100 : volume));
                     printf("Volume: %" PRIu32 "\n", volume);
                 } else {
                     // fill the tx buffer with wav file data
@@ -595,7 +595,7 @@ TEST_CASE("test uac tx writing", "[uac_host][tx]")
 
 exit_tx:
     free(tx_buffer);
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(uac_device_handle, UAC_CTRL_UAC_MUTE, (void *)1));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(uac_device_handle, 1));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_close(uac_device_handle));
 
     test_uac_teardown(false);
@@ -640,8 +640,8 @@ TEST_CASE("test uac tx rx loopback", "[uac_host][tx][rx]")
     };
 
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_start(mic_device_handle, &stream_config));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(mic_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(mic_device_handle, UAC_CTRL_UAC_VOLUME, (void *)80));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(mic_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(mic_device_handle, 80));
 
     uac_host_dev_alt_param_t spk_alt_params;
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_get_device_alt_param(spk_device_handle, 1, &spk_alt_params));
@@ -660,8 +660,8 @@ TEST_CASE("test uac tx rx loopback", "[uac_host][tx][rx]")
     }
 
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_start(spk_device_handle, &stream_config));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(spk_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(spk_device_handle, UAC_CTRL_UAC_VOLUME, (void *)80));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(spk_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(spk_device_handle, 80));
 
     uint8_t *rx_buffer = (uint8_t *)calloc(1, rx_buffer_threshold);
     uint8_t *rx_buffer_stereo = NULL;
@@ -739,9 +739,9 @@ restart_rx:
     }
 
 exit_rx:
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(spk_device_handle, UAC_CTRL_UAC_MUTE, (void *)1));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(spk_device_handle, 1));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_close(spk_device_handle));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(mic_device_handle, UAC_CTRL_UAC_MUTE, (void *)1));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(mic_device_handle, 1));
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_close(mic_device_handle));
     free(rx_buffer);
     if (rx_buffer_stereo) {
@@ -789,8 +789,8 @@ TEST_CASE("test uac tx rx loopback with disconnect", "[uac_host][tx][rx][hot-plu
     };
 
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_start(mic_device_handle, &stream_config));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(mic_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(mic_device_handle, UAC_CTRL_UAC_VOLUME, (void *)80));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(mic_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(mic_device_handle, 80));
 
     uac_host_dev_alt_param_t spk_alt_params;
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_get_device_alt_param(spk_device_handle, 1, &spk_alt_params));
@@ -809,8 +809,8 @@ TEST_CASE("test uac tx rx loopback with disconnect", "[uac_host][tx][rx][hot-plu
     }
 
     TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_start(spk_device_handle, &stream_config));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(spk_device_handle, UAC_CTRL_UAC_MUTE, (void *)0));
-    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_control(spk_device_handle, UAC_CTRL_UAC_VOLUME, (void *)80));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_mute(spk_device_handle, 0));
+    TEST_ASSERT_EQUAL(ESP_OK, uac_host_device_set_volume(spk_device_handle, 80));
 
     uint8_t *rx_buffer = (uint8_t *)calloc(1, rx_buffer_threshold);
     uint8_t *rx_buffer_stereo = NULL;

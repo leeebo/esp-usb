@@ -989,6 +989,42 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
     uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TRANSFER_ERROR);
 }
 
+static void stream_tx_xfer_submit(usb_transfer_t *out_xfer)
+{
+    uac_iface_t *iface = get_interface_by_ep(out_xfer->bEndpointAddress);
+    assert(iface);
+
+    size_t data_len = _ring_buffer_get_len(iface->ringbuf);
+    if (data_len >= iface->packet_size * iface->packet_num) {
+        data_len = iface->packet_size * iface->packet_num;
+        size_t actual_num_bytes = 0;
+        _ring_buffer_pop(iface->ringbuf, out_xfer->data_buffer, data_len, &actual_num_bytes, 0);
+        assert(actual_num_bytes == data_len);
+        // Relaunch transfer, as the pipe state may change
+        // the transfer may fail eg. the device is disconnected or the pipe is suspended
+        // the data in ringbuffer will be dropped without notify user
+        usb_host_transfer_submit(out_xfer);
+        data_len = _ring_buffer_get_len(iface->ringbuf);
+        if (data_len <= iface->ringbuf_threshold) {
+            // Notify user send done
+            uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TX_DONE);
+        }
+    } else {
+        // add the transfer to free list
+        UAC_ENTER_CRITICAL();
+        for (int i = 0; i < iface->xfer_num; i++) {
+            if (iface->xfer_list[i] == out_xfer) {
+                iface->free_xfer_list[i] = out_xfer;
+                iface->xfer_list[i] = NULL;
+                break;
+            }
+        }
+        UAC_EXIT_CRITICAL();
+        // Notify user send done
+        uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TX_DONE);
+    }
+}
+
 /**
  * @brief UAC OUT Transfer complete callback
  *
@@ -1010,33 +1046,8 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
 
     switch (out_xfer->status) {
     case USB_TRANSFER_STATUS_COMPLETED: {
-        size_t data_len = _ring_buffer_get_len(iface->ringbuf);
-        if (data_len >= iface->packet_size * iface->packet_num) {
-            data_len = iface->packet_size * iface->packet_num;
-            size_t actual_num_bytes = 0;
-            _ring_buffer_pop(iface->ringbuf, out_xfer->data_buffer, data_len, &actual_num_bytes, 0);
-            assert(actual_num_bytes == data_len);
-            // Relaunch transfer
-            usb_host_transfer_submit(out_xfer);
-            data_len = _ring_buffer_get_len(iface->ringbuf);
-            if (data_len <= iface->ringbuf_threshold) {
-                // Notify user send done
-                uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TX_DONE);
-            }
-        } else {
-            // add the transfer to free list
-            UAC_ENTER_CRITICAL();
-            for (int i = 0; i < iface->xfer_num; i++) {
-                if (iface->xfer_list[i] == out_xfer) {
-                    iface->free_xfer_list[i] = out_xfer;
-                    iface->xfer_list[i] = NULL;
-                    break;
-                }
-            }
-            UAC_EXIT_CRITICAL();
-            // Notify user send done
-            uac_host_user_interface_callback(iface, UAC_HOST_DEVICE_EVENT_TX_DONE);
-        }
+        // Submit the next transfer
+        stream_tx_xfer_submit(out_xfer);
         return;
     }
     case USB_TRANSFER_STATUS_NO_DEVICE:
@@ -2035,6 +2046,11 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
     UAC_RETURN_ON_INVALID_ARG(iface);
     UAC_RETURN_ON_INVALID_ARG(data);
 
+    // Only guarantee the data is written to the ringbuffer, in the case
+    // 1. the interface is active when the write is called
+    // Data will not be sent to the device and dropped in any of the following cases:
+    // 1. the pipe state changed to inactive during or after the ringbuffer write
+    // 2. the pipe state changed to inactive during continuous transfer submit
     UAC_RETURN_ON_ERROR(uac_host_interface_try_lock(iface, DEFAULT_CTRL_XFER_TIMEOUT_MS), "Unable to lock UAC Interface");
     if (UAC_INTERFACE_STATE_ACTIVE != iface->state) {
         uac_host_interface_unlock(iface);
@@ -2067,7 +2083,7 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
             iface->free_xfer_list[i] = NULL;
             iface->xfer_list[i]->status = USB_TRANSFER_STATUS_COMPLETED;
             UAC_EXIT_CRITICAL();
-            stream_tx_xfer_done(iface->xfer_list[i]);
+            stream_tx_xfer_submit(iface->xfer_list[i]);
             UAC_ENTER_CRITICAL();
         }
 exit_critical:
@@ -2086,7 +2102,7 @@ esp_err_t uac_host_get_device_info(uac_host_device_handle_t uac_dev_handle, uac_
     return ESP_OK;
 }
 
-esp_err_t uac_host_device_control(uac_host_device_handle_t uac_dev_handle, uac_host_ctrl_t type, void *value)
+esp_err_t uac_host_device_set_mute(uac_host_device_handle_t uac_dev_handle, bool mute)
 {
     uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
     UAC_RETURN_ON_INVALID_ARG(iface);
@@ -2094,21 +2110,32 @@ esp_err_t uac_host_device_control(uac_host_device_handle_t uac_dev_handle, uac_h
     UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state || UAC_INTERFACE_STATE_READY == iface->state),
                         ESP_ERR_INVALID_STATE, "device not ready or active");
 
-    switch (type) {
-    case UAC_CTRL_UAC_MUTE:
-        UAC_RETURN_ON_ERROR(uac_cs_request_set_mute(iface, (bool)value), "Unable to set mute");
-        break;
-    case UAC_CTRL_UAC_VOLUME: {
-        uint32_t volume_db = (uint32_t)value * UAC_SPK_VOLUME_STEP + UAC_SPK_VOLUME_MIN;
-        UAC_RETURN_ON_ERROR(uac_cs_request_set_volume(iface, volume_db), "Unable to set volume");
-        break;
-    }
-    case UAC_CTRL_UAC_VOLUME_DB:
-        UAC_RETURN_ON_ERROR(uac_cs_request_set_volume(iface, (uint32_t)value), "Unable to set volume");
-        break;
-    default:
-        return ESP_ERR_NOT_SUPPORTED;
-    }
+    UAC_RETURN_ON_ERROR(uac_cs_request_set_mute(iface, mute), "Unable to set mute");
+    return ESP_OK;
+}
 
+esp_err_t uac_host_device_set_volume(uac_host_device_handle_t uac_dev_handle, uint8_t volume)
+{
+    uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
+    UAC_RETURN_ON_INVALID_ARG(iface);
+    UAC_RETURN_ON_FALSE(volume <= 100, ESP_ERR_INVALID_ARG, "Invalid volume value");
+    // Check if the device is active or ready
+    UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state || UAC_INTERFACE_STATE_READY == iface->state),
+                        ESP_ERR_INVALID_STATE, "device not ready or active");
+
+    uint32_t volume_db = volume * UAC_SPK_VOLUME_STEP + UAC_SPK_VOLUME_MIN;
+    UAC_RETURN_ON_ERROR(uac_cs_request_set_volume(iface, volume_db), "Unable to set volume");
+    return ESP_OK;
+}
+
+esp_err_t uac_host_device_set_volume_db(uac_host_device_handle_t uac_dev_handle, uint32_t volume_db)
+{
+    uac_iface_t *iface = get_iface_by_handle(uac_dev_handle);
+    UAC_RETURN_ON_INVALID_ARG(iface);
+    // Check if the device is active or ready
+    UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state || UAC_INTERFACE_STATE_READY == iface->state),
+                        ESP_ERR_INVALID_STATE, "device not ready or active");
+
+    UAC_RETURN_ON_ERROR(uac_cs_request_set_volume(iface, volume_db), "Unable to set volume");
     return ESP_OK;
 }

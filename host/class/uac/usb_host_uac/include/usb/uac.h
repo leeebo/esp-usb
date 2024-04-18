@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,7 +18,7 @@ extern "C" {
 /**
  * @brief Audio Interface Subclass Codes
  *
- * @see Table A.2 of audio10.pdf
+ * @see Table A-2 of audio10.pdf
  */
 typedef enum {
     UAC_SUBCLASS_UNDEFINED                            = 0x00,
@@ -30,17 +30,17 @@ typedef enum {
 /**
  * @brief Audio Interface Protocol Codes
  *
- * @see Table A.3 of audio10.pdf
+ * @see Table A-3 of audio10.pdf
  */
 typedef enum {
     UAC_PROTOCOL_UNDEFINED                            = 0x00,
-    UAC_PROTOCOLv20                                   = 0x20,     // refer UAC v2.0
+    UAC_PROTOCOL_v20                                  = 0x20,     // refer UAC v2.0
 } uac_protocol_t;
 
 /**
  * @brief Audio Class-Specific Descriptor Types
  *
- * @see Table A.4 of audio10.pdf
+ * @see Table A-4 of audio10.pdf
  */
 typedef enum {
     UAC_CS_UNDEFINED                                  = 0x20,
@@ -54,7 +54,7 @@ typedef enum {
 /**
  * @brief Audio Class-Specific AC Interface Descriptor Subtypes
  *
- * @see Table A.5 of audio10.pdf
+ * @see Table A-5 of audio10.pdf
  */
 typedef enum {
     UAC_AC_DESCRIPTOR_UNDEFINED                       = 0x00,
@@ -71,7 +71,7 @@ typedef enum {
 /**
  * @brief Audio Class-Specific AS Interface Descriptor Subtypes
  *
- * @see Table A.6 of audio10.pdf
+ * @see Table A-6 of audio10.pdf
  */
 typedef enum {
     UAC_AS_DESCRIPTOR_UNDEFINED                       = 0x00,
@@ -83,7 +83,7 @@ typedef enum {
 /**
  * @brief Processing Unit Process Types
  *
- * @see Table A.7 of audio10.pdf
+ * @see Table A-7 of audio10.pdf
  */
 typedef enum {
     UAC_PROCESS_UNDEFINED                             = 0x00,
@@ -98,7 +98,7 @@ typedef enum {
 /**
  * @brief Audio Class-Specific Endpoint Descriptor Subtypes
  *
- * @see Table A.8 of audio10.pdf
+ * @see Table A-8 of audio10.pdf
  */
 typedef enum {
     UAC_EP_DESCRIPTOR_UNDEFINED                       = 0x00,
@@ -108,7 +108,7 @@ typedef enum {
 /**
  * @brief Audio Class-Specific Request Codes
  *
- * @see Table A.9 of audio10.pdf
+ * @see Table A-9 of audio10.pdf
  */
 typedef enum {
     UAC_REQUEST_UNDEFINED                             = 0x00,
@@ -130,7 +130,7 @@ typedef enum {
 /**
  * @brief Terminal Control Selectors
  *
- * @see Table A.10.1 of audio10.pdf
+ * @see Table A-10 of audio10.pdf
  */
 typedef enum {
     UAC_TE_CONTROL_UNDEFINED                          = 0x00,
@@ -140,7 +140,7 @@ typedef enum {
 /**
  * @brief Feature Unit Control Selectors
  *
- * @see Table A.10.2 of audio10.pdf
+ * @see Table A-11 of audio10.pdf
  */
 typedef enum {
     UAC_FU_CONTROL_UNDEFINED                          = 0x00,
@@ -161,7 +161,7 @@ typedef enum {
 /**
  * @brief UP/DOWNMIX Processing Unit Control Selectors
  *
- * @see Table A.10.3.1 of audio10.pdf
+ * @see Table A-12 of audio10.pdf
  */
 typedef enum {
     UAC_UD_CONTROL_UNDEFINED                          = 0x00,
@@ -172,7 +172,7 @@ typedef enum {
 /**
  * @brief Dolby Prologic Processing Unit Control Selectors
  *
- * @see Table A.10.3.2 of audio10.pdf
+ * @see Table A-13 of audio10.pdf
  */
 typedef enum {
     UAC_DP_CONTROL_UNDEFINED                          = 0x00,
@@ -183,18 +183,18 @@ typedef enum {
 /**
  * @brief 3D Stereo Extender Processing Unit Control Selectors
  *
- * @see Table A.10.3.3 of audio10.pdf
+ * @see Table A-14 of audio10.pdf
  */
 typedef enum {
     UAC_3DSE_CONTROL_UNDEFINED                        = 0x00,
     UAC_3DSE_ENABLE_CONTROL                           = 0x01,
-    UAC_3DSE_SPACIOUSNESS_CONTROL                     = 0x02
+    UAC_3DSE_SPACIOUSNESS_CONTROL                     = 0x03
 } uac_3dse_control_selector_t;
 
 /**
  * @brief Reverberation Processing Unit Control Selectors
  *
- * @see Table A.10.3.4 of audio10.pdf
+ * @see Table A-15 of audio10.pdf
  */
 typedef enum {
     UAC_RV_CONTROL_UNDEFINED                          = 0x00,
@@ -207,7 +207,7 @@ typedef enum {
 /**
  * @brief Chorus Processing Unit Control Selectors
  *
- * @see Table A.10.3.5 of audio10.pdf
+ * @see Table A-16 of audio10.pdf
  */
 typedef enum {
     UAC_CH_CONTROL_UNDEFINED                          = 0x00,
@@ -220,7 +220,7 @@ typedef enum {
 /**
  * @brief Dynamic Range Compressor Processing Unit Control Selectors
  *
- * @see Table A.10.3.6 of audio10.pdf
+ * @see Table A-17 of audio10.pdf
  */
 typedef enum {
     UAC_DR_CONTROL_UNDEFINED                          = 0x00,
@@ -237,7 +237,7 @@ typedef enum {
 /**
  * @brief Extension Unit Control Selectors
  *
- * @see Table A.10.4 of audio10.pdf
+ * @see Table A-18 of audio10.pdf
  *
  */
 typedef enum {
@@ -250,7 +250,7 @@ typedef enum {
 /**
  * @brief Endpoint Control Selectors
  *
- * @see Table A.10.5 of audio10.pdf
+ * @see Table A-19 of audio10.pdf
  */
 typedef enum {
     UAC_EP_CONTROL_UNDEFINED                          = 0x00,
@@ -281,7 +281,7 @@ typedef enum {
 /**
 * @brief USB Terminal Types
 *
-* @see Table 2.1 of termt10.pdf
+* @see Table 2-1 of termt10.pdf
 */
 typedef enum {
     UAC_USB_TERMINAL_TYPE_USB_UNDEFINED               = 0x0100,
@@ -292,7 +292,7 @@ typedef enum {
 /**
 * @brief Input Terminal Types
 *
-* @see Table 2.2 of termt10.pdf
+* @see Table 2-2 of termt10.pdf
 */
 typedef enum {
     UAC_INPUT_TERMINAL_UNDEFINED                      = 0x0200,
@@ -307,7 +307,7 @@ typedef enum {
 /**
  * @brief Output Terminal Types
  *
- * @see Table 2.3 of termt10.pdf
+ * @see Table 2-3 of termt10.pdf
  */
 typedef enum {
     UAC_OUTPUT_TERMINAL_UNDEFINED                     = 0x0300,
@@ -325,7 +325,7 @@ typedef enum {
 /**
  * @brief Audio Data Format Type I Codes
  *
- * @see Table A 1.1 of frmts10.pdf
+ * @see Table A-1 of frmts10.pdf
  */
 typedef enum {
     UAC_TYPE_I_UNDEFINED                              = 0x0000,
@@ -339,16 +339,17 @@ typedef enum {
 /**
  * @brief Format Type Codes
  *
+ *  @see Table A-4 of frmts10.pdf
  */
 typedef enum {
-    UAC_FORMAT_TYPE_UNDEFINED                         = 0x0000,
-    UAC_FORMAT_TYPE_I                                 = 0x0001,
-    UAC_FORMAT_TYPE_II                                = 0x0002,
-    UAC_FORMAT_TYPE_III                               = 0x0003
+    UAC_FORMAT_TYPE_UNDEFINED                         = 0x00,
+    UAC_FORMAT_TYPE_I                                 = 0x01,
+    UAC_FORMAT_TYPE_II                                = 0x02,
+    UAC_FORMAT_TYPE_III                               = 0x03
 } uac_format_type_t;
 
 /**
- * @brief Audio Class-Specific Interface Descriptor
+ * @brief Audio Class-Specific Interface Descriptor Common Header
  *
  */
 typedef struct {
@@ -418,7 +419,7 @@ typedef struct {
     uint8_t bUnitID;
     uint8_t bSourceID;
     uint8_t bControlSize;
-    uint8_t bmaControls[3 * 2];
+    uint8_t bmaControls[3 * 2]; // 2 channels + channel 0, 2 bytes each
     uint8_t iFeature;
 } __attribute__((packed)) uac_ac_feature_unit_desc_t;
 

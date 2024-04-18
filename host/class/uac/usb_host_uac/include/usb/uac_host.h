@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -26,7 +26,14 @@ extern "C" {
  * To decrease memory usage 32 wide characters (64 bytes per every string) is used.
 */
 #define UAC_STR_DESC_MAX_LENGTH              (32)
-#define FLAG_STREAM_SUSPEND_AFTER_START      (1 << 0)      /*!< suspend stream after start, then call uac_host_device_resume to resume */
+
+/**
+ * @brief Flags to control stream work flow
+ *
+ * FLAG_STREAM_SUSPEND_AFTER_START: do not start stream transfer during start, only claim interface and prepare memory
+ * @note User should call uac_host_device_resume to start stream transfer when needed
+*/
+#define FLAG_STREAM_SUSPEND_AFTER_START      (1 << 0)
 
 typedef struct uac_interface *uac_host_device_handle_t;    /*!< Logic Device Handle. Handle to a particular UAC interface */
 
@@ -43,8 +50,8 @@ typedef enum {
  * @brief USB UAC Device (Interface) event id
 */
 typedef enum {
-    UAC_HOST_DEVICE_EVENT_RX_DONE = 0x00,                /*!< Data in the rx buffer is higher than the threshold */
-    UAC_HOST_DEVICE_EVENT_TX_DONE,                       /*!< Data in the tx buffer lower than the threshold */
+    UAC_HOST_DEVICE_EVENT_RX_DONE = 0x00,                /*!< RX Done: the receive buffer data size exceeds the threshold */
+    UAC_HOST_DEVICE_EVENT_TX_DONE,                       /*!< TX Done: the transmit buffer data size falls below the threshold */
     UAC_HOST_DEVICE_EVENT_TRANSFER_ERROR,                /*!< UAC Device transfer error */
     UAC_HOST_DRIVER_EVENT_DISCONNECTED,                  /*!< UAC Device has been disconnected */
 } uac_host_device_event_t;
@@ -79,7 +86,7 @@ typedef void (*uac_host_device_event_cb_t)(uac_host_device_handle_t uac_device_h
  * @param[in] protocol  Protocol of the UAC device
  *
  */
-typedef void (*print_class_descriptor_with_context_cb)(const usb_standard_desc_t *,
+typedef void (*print_class_descriptor_with_context_cb)(const usb_standard_desc_t *desc,
         uint8_t subclass, uint8_t protocol);
 
 /**
@@ -162,17 +169,6 @@ typedef struct {
     uint16_t flags;                                      /*!< Control flags */
 } uac_host_stream_config_t;
 
-/**
- * @brief UVC control type
-*/
-typedef enum {
-    UAC_CTRL_NONE = 0,        /*!< None */
-    UAC_CTRL_UAC_MUTE,        /*!< mute control. ctrl_data (false/true) */
-    UAC_CTRL_UAC_VOLUME,      /*!< volume control. ctrl_data (0~100) */
-    UAC_CTRL_UAC_VOLUME_DB,   /*!< volume control. ctrl_data DB value */
-    UAC_CTRL_MAX,             /*!< max type value */
-} uac_host_ctrl_t;
-
 // ----------------------------- Public ---------------------------------------
 /**
  * @brief Install USB Host UAC Class driver
@@ -192,6 +188,7 @@ esp_err_t uac_host_install(const uac_host_driver_config_t *config);
 /**
  * @brief Uninstall USB Host UAC Class driver
  *
+ * @note This function can only be called after all open devices have been closed
  * @return esp_err_t
  *  - ESP_OK on success
  *  - ESP_ERR_INVALID_STATE if UAC driver is not installed or device is still opened
@@ -356,18 +353,40 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
                                 uint32_t timeout);
 
 /**
- * @brief UAC device control with specific control type
- *
- * @param[in] uac_dev_handle  UAC device handle
- * @param[in] type            Control type
- * @param[in] value           Control value
+ * @brief Mute or un-mute the UAC device
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] mute        True to mute, false to unmute
  * @return esp_err_t
- *  - ESP_OK on success
- *  - ESP_ERR_INVALID_STATE if UAC device is not ready or active
- *  - ESP_ERR_INVALID_ARG if the device handle is invalid
- *  - ESP_ERR_NOT_SUPPORTED if the control type is not supported
+ * - ESP_OK on success
+ * - ESP_ERR_INVALID_STATE if the device is not ready or active
+ * - ESP_ERR_INVALID_ARG if the device handle is invalid
+ * - ESP_ERR_TIMEOUT if the control timed out
  */
-esp_err_t uac_host_device_control(uac_host_device_handle_t uac_dev_handle, uac_host_ctrl_t type, void *value);
+esp_err_t uac_host_device_set_mute(uac_host_device_handle_t uac_dev_handle, bool mute);
+
+/**
+ * @brief Set the volume of the UAC device
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] volume      Volume to set, 0-100
+ * @return esp_err_t
+ * - ESP_OK on success
+ * - ESP_ERR_INVALID_STATE if the device is not ready or active
+ * - ESP_ERR_INVALID_ARG if the device handle is invalid or volume is out of range
+ * - ESP_ERR_TIMEOUT if the control timed out
+ */
+esp_err_t uac_host_device_set_volume(uac_host_device_handle_t uac_dev_handle, uint8_t volume);
+
+/**
+ * @brief Set the volume of the UAC device in dB
+ * @param[in] iface       Pointer to UAC interface structure
+ * @param[in] volume_db   Volume to set, db
+ * @return esp_err_t
+ * - ESP_OK on success
+ * - ESP_ERR_INVALID_STATE if the device is not ready or active
+ * - ESP_ERR_INVALID_ARG if the device handle is invalid
+ * - ESP_ERR_TIMEOUT if the control timed out
+ */
+esp_err_t uac_host_device_set_volume_db(uac_host_device_handle_t uac_dev_handle, uint32_t volume_db);
 
 #ifdef __cplusplus
 }

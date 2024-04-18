@@ -28,16 +28,19 @@ The following steps outline the typical API call pattern of the UAC Class Driver
     - `uac_host_device_suspend()`
     - `uac_host_device_resume()`
 8. To control the volume/mute use:
-    - `uac_host_device_control()`
-9. After the uac device is opened, the device event callback will be called with the following events:
+    - `uac_host_device_set_mute()`
+9. To control the volume use:
+    - `uac_host_device_set_volume()` or `uac_host_device_set_volume_db()`
+10. After the uac device is opened, the device event callback will be called with the following events:
     - UAC_HOST_DEVICE_EVENT_RX_DONE
     - UAC_HOST_DEVICE_EVENT_TX_DONE
     - UAC_HOST_DEVICE_EVENT_TRANSFER_ERROR
     - UAC_HOST_DRIVER_EVENT_DISCONNECTED
-10. When the `UAC_HOST_DRIVER_EVENT_DISCONNECTED` event is called, the device should be closed via `uac_host_device_close()`
-11. The UAC driver can be uninstalled via `uac_host_uninstall()`
+11. When the `UAC_HOST_DRIVER_EVENT_DISCONNECTED` event is called, the device should be closed via `uac_host_device_close()`
+12. The UAC driver can be uninstalled via `uac_host_uninstall()`
 
-> Note: For physical with both microphone and speaker, the driver will treat it as two separate logic devices.
+> Note: For physical device with both microphone and speaker, the driver will treat it as two separate logic devices.
+
 > The `UAC_HOST_DRIVER_EVENT_TX_CONNECTED` and `UAC_HOST_DRIVER_EVENT_RX_CONNECTED` event will be called for the device.
 
 ## Known issues

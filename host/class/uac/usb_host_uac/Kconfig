@@ -1,7 +1,7 @@
 menu "USB Host UAC"
     config PRINTF_UAC_CONFIGURATION_DESCRIPTOR
         bool "Print UAC Configuration Descriptor"
-        default y
+        default n
         help
             Print UAC Configuration Descriptor to console.
     config UAC_NUM_ISOC_URBS
