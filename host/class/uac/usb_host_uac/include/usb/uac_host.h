@@ -321,7 +321,7 @@ esp_err_t uac_host_device_resume(uac_host_device_handle_t uac_dev_handle);
 esp_err_t uac_host_device_stop(uac_host_device_handle_t uac_dev_handle);
 
 /**
- * @brief Read data from UAC stream
+ * @brief Read data from UAC stream buffer, only available after stream started
  *
  * @param[in] uac_dev_handle  UAC device handle
  * @param[out] data           Pointer to the buffer to store the data
@@ -337,7 +337,10 @@ esp_err_t uac_host_device_read(uac_host_device_handle_t uac_dev_handle, uint8_t 
                                uint32_t *bytes_read, uint32_t timeout);
 
 /**
- * @brief Write data to UAC stream
+ * @brief Write data to UAC stream buffer, only can be called after stream started
+ *
+ * @note The data will be sent to internal ringbuffer before function return,
+ * the actual data transfer is scheduled by the background task.
  *
  * @param[in] uac_dev_handle  UAC device handle
  * @param[in] data            Pointer to the data buffer
@@ -360,6 +363,7 @@ esp_err_t uac_host_device_write(uac_host_device_handle_t uac_dev_handle, uint8_t
  * - ESP_OK on success
  * - ESP_ERR_INVALID_STATE if the device is not ready or active
  * - ESP_ERR_INVALID_ARG if the device handle is invalid
+ * - ESP_ERR_NOT_SUPPORTED if the device does not support mute control
  * - ESP_ERR_TIMEOUT if the control timed out
  */
 esp_err_t uac_host_device_set_mute(uac_host_device_handle_t uac_dev_handle, bool mute);
@@ -372,6 +376,7 @@ esp_err_t uac_host_device_set_mute(uac_host_device_handle_t uac_dev_handle, bool
  * - ESP_OK on success
  * - ESP_ERR_INVALID_STATE if the device is not ready or active
  * - ESP_ERR_INVALID_ARG if the device handle is invalid or volume is out of range
+ * - ESP_ERR_NOT_SUPPORTED if the device does not support volume control
  * - ESP_ERR_TIMEOUT if the control timed out
  */
 esp_err_t uac_host_device_set_volume(uac_host_device_handle_t uac_dev_handle, uint8_t volume);
@@ -384,6 +389,7 @@ esp_err_t uac_host_device_set_volume(uac_host_device_handle_t uac_dev_handle, ui
  * - ESP_OK on success
  * - ESP_ERR_INVALID_STATE if the device is not ready or active
  * - ESP_ERR_INVALID_ARG if the device handle is invalid
+ * - ESP_ERR_NOT_SUPPORTED if the device does not support volume control
  * - ESP_ERR_TIMEOUT if the control timed out
  */
 esp_err_t uac_host_device_set_volume_db(uac_host_device_handle_t uac_dev_handle, uint32_t volume_db);

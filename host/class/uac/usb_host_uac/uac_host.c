@@ -325,40 +325,6 @@ static uac_device_t *get_uac_device_by_addr(uint8_t addr)
     return NULL;
 }
 
-/**
- * @brief Return UAC Device from the transfer context
- *
- * @param[in] xfer   USB transfer struct
- * @return uac_device_t Pointer to UAC Device
- */
-static inline uac_device_t *get_uac_device_from_context(usb_transfer_t *xfer)
-{
-    return (uac_device_t *)xfer->context;
-}
-
-/**
- * @brief Get UAC Interface pointer by Endpoint address
- *
- * @param[in] ep_addr      Endpoint address
- * @return uac_iface_t     Pointer to UAC Interface configuration structure
- */
-static uac_iface_t *get_interface_by_ep(uint8_t ep_addr)
-{
-    uac_iface_t *interface = NULL;
-
-    UAC_ENTER_CRITICAL();
-    STAILQ_FOREACH(interface, &s_uac_driver->uac_ifaces_tailq, tailq_entry) {
-        for (int i = 0; i < interface->dev_info.iface_alt_num; i++) {
-            if (ep_addr == interface->iface_alt[i].ep_addr) {
-                UAC_EXIT_CRITICAL();
-                return interface;
-            }
-        }
-    }
-
-    UAC_EXIT_CRITICAL();
-    return NULL;
-}
 
 /**
  * @brief Get UAC Interface pointer by Interface number
@@ -673,7 +639,6 @@ fail:
 /**
  * @brief Remove interface from a list
  *
- * Use only inside critical section
  *
  * @param[in] uac_iface    UAC interface handle
  * @return esp_err_t
@@ -924,11 +889,9 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
 {
     assert(in_xfer);
 
-    uac_iface_t *iface = get_interface_by_ep(in_xfer->bEndpointAddress);
+    uac_iface_t *iface = in_xfer->context;
     assert(iface);
 
-    // Interfaces' parent device should be the same as the uac_device in context
-    assert(get_uac_device_from_context(in_xfer) == iface->parent);
     if (iface->state != UAC_INTERFACE_STATE_ACTIVE) {
         in_xfer->status = USB_TRANSFER_STATUS_CANCELED;
     }
@@ -991,7 +954,7 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
 
 static void stream_tx_xfer_submit(usb_transfer_t *out_xfer)
 {
-    uac_iface_t *iface = get_interface_by_ep(out_xfer->bEndpointAddress);
+    uac_iface_t *iface = out_xfer->context;
     assert(iface);
 
     size_t data_len = _ring_buffer_get_len(iface->ringbuf);
@@ -1034,11 +997,9 @@ static void stream_tx_xfer_done(usb_transfer_t *out_xfer)
 {
     assert(out_xfer);
 
-    uac_iface_t *iface = get_interface_by_ep(out_xfer->bEndpointAddress);
+    uac_iface_t *iface = out_xfer->context;
     assert(iface);
 
-    // Interfaces' parent device should be the same as the uac_device in context
-    assert(get_uac_device_from_context(out_xfer) == iface->parent);
     // If the iface is not active, cancel the transfer
     if (iface->state != UAC_INTERFACE_STATE_ACTIVE) {
         out_xfer->status = USB_TRANSFER_STATUS_CANCELED;
@@ -1151,7 +1112,7 @@ static esp_err_t uac_host_interface_resume(uac_iface_t *iface)
             assert(iface->free_xfer_list[i]);
             iface->free_xfer_list[i]->device_handle = iface->parent->dev_hdl;
             iface->free_xfer_list[i]->callback = stream_rx_xfer_done;
-            iface->free_xfer_list[i]->context = iface->parent;
+            iface->free_xfer_list[i]->context = iface;
             iface->free_xfer_list[i]->timeout_ms = DEFAULT_ISOC_XFER_TIMEOUT_MS;
             iface->free_xfer_list[i]->bEndpointAddress = iface->iface_alt[iface->cur_alt].ep_addr;
             // we request the size same as the MPS of the endpoint, but the actual size should be checked in the callback
@@ -1171,7 +1132,7 @@ static esp_err_t uac_host_interface_resume(uac_iface_t *iface)
             assert(iface->free_xfer_list[i]);
             iface->free_xfer_list[i]->device_handle = iface->parent->dev_hdl;
             iface->free_xfer_list[i]->callback = stream_tx_xfer_done;
-            iface->free_xfer_list[i]->context = iface->parent;
+            iface->free_xfer_list[i]->context = iface;
             iface->free_xfer_list[i]->timeout_ms = DEFAULT_ISOC_XFER_TIMEOUT_MS;
             iface->free_xfer_list[i]->bEndpointAddress = iface->iface_alt[iface->cur_alt].ep_addr;
             // set the data buffer to 0
@@ -1526,7 +1487,7 @@ static esp_err_t uac_cs_request_set_volume(uac_iface_t *iface, uint32_t volume)
 {
     uint8_t feature_unit = iface->parent->feature_unit[iface->dev_info.type];
     uint8_t vol_ch_map = iface->parent->vol_ch_map[iface->dev_info.type];
-    UAC_RETURN_ON_FALSE(feature_unit && vol_ch_map, ESP_ERR_INVALID_STATE, "volume control not supported");
+    UAC_RETURN_ON_FALSE(feature_unit && vol_ch_map, ESP_ERR_NOT_SUPPORTED, "volume control not supported");
     uint8_t ctrl_iface_num = iface->parent->ctrl_iface_num;
     uint8_t tmp[2] = { 0, 0 };
     esp_err_t ret = ESP_OK;
@@ -1566,7 +1527,7 @@ static esp_err_t uac_cs_request_set_mute(uac_iface_t *iface, bool mute)
 {
     uint8_t feature_unit = iface->parent->feature_unit[iface->dev_info.type];
     uint8_t mute_ch_map = iface->parent->mute_ch_map[iface->dev_info.type];
-    UAC_RETURN_ON_FALSE(feature_unit, ESP_ERR_INVALID_STATE, "mute control not supported");
+    UAC_RETURN_ON_FALSE(feature_unit, ESP_ERR_NOT_SUPPORTED, "mute control not supported");
     uint8_t ctrl_iface_num = iface->parent->ctrl_iface_num;
     uint8_t tmp[1] = { 0 };
     esp_err_t ret = ESP_OK;
