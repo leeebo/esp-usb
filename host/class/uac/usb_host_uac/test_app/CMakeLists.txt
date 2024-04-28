@@ -8,4 +8,4 @@ set(EXTRA_COMPONENT_DIRS
         ${EXTRA_COMPONENT_DIRS}
         )
 
-project(test_app_usb_host_uac)
+project(local_test_app_usb_host_uac)
