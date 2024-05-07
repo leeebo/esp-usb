@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "sdkconfig.h"
 #include "usb/usb_types_ch9.h"
 
 #ifdef __cplusplus
@@ -437,7 +438,7 @@ typedef struct {
     uint16_t wFormatTag;
 } __attribute__((packed)) uac_as_general_desc_t;
 
-#define UAC_FREQ_NUM_MAX                  3
+#define UAC_FREQ_NUM_MAX           CONFIG_UAC_FREQ_NUM_MAX
 /**
  * @brief Audio Class-Specific AS Type I Format Type Descriptor
  *

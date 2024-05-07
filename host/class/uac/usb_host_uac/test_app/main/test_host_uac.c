@@ -64,7 +64,10 @@ static const uint32_t UAC_DEV_SPK_IFACE_SAMPLE_FREQ_ALT[UAC_DEV_SPK_IFACE_ALT_NU
 
 static void force_conn_state(bool connected, TickType_t delay_ticks)
 {
-    TEST_ASSERT_NOT_NULL(phy_hdl);
+    if (!phy_hdl) {
+        // P4 currently not support phy operation
+        return;
+    }
     if (delay_ticks > 0) {
         //Delay of 0 ticks causes a yield. So skip if delay_ticks is 0.
         vTaskDelay(delay_ticks);
@@ -750,6 +753,7 @@ exit_rx:
     test_uac_teardown(false);
 }
 
+#if !CONFIG_IDF_TARGET_ESP32P4
 TEST_CASE("test uac tx rx loopback with disconnect", "[uac_host][tx][rx][hot-plug]")
 {
     test_uac_setup();
@@ -897,3 +901,4 @@ exit_rx:
     }
     test_uac_teardown(false);
 }
+#endif

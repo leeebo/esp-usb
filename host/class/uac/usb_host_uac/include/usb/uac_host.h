@@ -82,12 +82,13 @@ typedef void (*uac_host_device_event_cb_t)(uac_host_device_handle_t uac_device_h
  * @brief  USB UAC host class descriptor print callback
  *
  * @param[in] desc  Pointer to the USB configuration descriptor
+ * @param[in] class  Class of the UAC device
  * @param[in] subclass  Subclass of the UAC device
  * @param[in] protocol  Protocol of the UAC device
  *
  */
 typedef void (*print_class_descriptor_with_context_cb)(const usb_standard_desc_t *desc,
-        uint8_t subclass, uint8_t protocol);
+        uint8_t class, uint8_t subclass, uint8_t protocol);
 
 /**
  * @brief Stream type

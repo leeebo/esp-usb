@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -214,11 +214,13 @@ static void print_unknown_desc(const uac_desc_header_t *desc)
     printf("\tbDescriptorSubtype 0x%x\n", desc->bDescriptorSubtype);
 }
 
-static void print_uac_class_descriptors(const usb_standard_desc_t *desc, uint8_t subclass, uint8_t protocol)
+static void print_uac_class_descriptors(const usb_standard_desc_t *desc, uint8_t class, uint8_t subclass, uint8_t protocol)
 {
+    if (class != USB_CLASS_AUDIO) {
+        return;
+    }
     const uint8_t *buff = (const uint8_t *)desc;
     uac_desc_header_t *header = (uac_desc_header_t *)desc;
-
     if (subclass == UAC_SUBCLASS_AUDIOCONTROL) {
         switch (header->bDescriptorSubtype) {
         case UAC_AC_HEADER:
@@ -274,6 +276,7 @@ static void usb_print_config_descriptor_with_context(const usb_config_desc_t *cf
     int offset = 0;
     uint16_t wTotalLength = cfg_desc->wTotalLength;
     const usb_standard_desc_t *next_desc = (const usb_standard_desc_t *)cfg_desc;
+    uint8_t class = 0;
     uint8_t subclass = 0;
     uint8_t protocol = 0;
 
@@ -285,6 +288,7 @@ static void usb_print_config_descriptor_with_context(const usb_config_desc_t *cf
         case USB_B_DESCRIPTOR_TYPE_INTERFACE: {
             const usb_intf_desc_t *intf_desc = (const usb_intf_desc_t *)next_desc;
             usbh_print_intf_desc(intf_desc);
+            class = intf_desc->bInterfaceClass;
             subclass = intf_desc->bInterfaceSubClass;
             protocol = intf_desc->bInterfaceProtocol;
             break;
@@ -297,7 +301,7 @@ static void usb_print_config_descriptor_with_context(const usb_config_desc_t *cf
             break;
         default:
             if (class_specific_cb) {
-                class_specific_cb(next_desc, subclass, protocol);
+                class_specific_cb(next_desc, class, subclass, protocol);
             }
             break;
         }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -561,8 +561,11 @@ static esp_err_t uac_host_interface_add(uac_device_t *uac_device, uint8_t iface_
                         iface_alt->dev_alt_param.sample_freq_lower = (as_format_type_desc->tSamFreq[2] << 16) | (as_format_type_desc->tSamFreq[1] << 8) | as_format_type_desc->tSamFreq[0];
                         iface_alt->dev_alt_param.sample_freq_upper = (as_format_type_desc->tSamFreq[5] << 16) | (as_format_type_desc->tSamFreq[4] << 8) | as_format_type_desc->tSamFreq[3];
                     } else {
-                        for (int i = 0; i < as_format_type_desc->bSamFreqType; i++) {
+                        for (int i = 0; i < as_format_type_desc->bSamFreqType && i < UAC_FREQ_NUM_MAX; i++) {
                             iface_alt->dev_alt_param.sample_freq[i] = (as_format_type_desc->tSamFreq[i * 3 + 2] << 16) | (as_format_type_desc->tSamFreq[i * 3 + 1] << 8) | as_format_type_desc->tSamFreq[i * 3];
+                        }
+                        if (as_format_type_desc->bSamFreqType > UAC_FREQ_NUM_MAX) {
+                            ESP_LOGW(TAG, "UAC Interface %d->%d, Frequency Number %d exceed the maximum %d", iface_desc->bInterfaceNumber, iface_alt->alt_idx, as_format_type_desc->bSamFreqType, UAC_FREQ_NUM_MAX);
                         }
                     }
                     ESP_LOGD(TAG, "UAC AS Format Type %d, Bit Resolution %d, Sample Freq Type %d", as_format_type_desc->bFormatType, as_format_type_desc->bBitResolution, as_format_type_desc->bSamFreqType);
