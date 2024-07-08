@@ -321,6 +321,20 @@ static uac_device_t *get_uac_device_by_addr(uint8_t addr)
     return NULL;
 }
 
+static uac_device_t *get_uac_device_by_vid_pid(uint16_t vid, uint16_t pid)
+{
+    uac_iface_t *interface = NULL;
+
+    UAC_ENTER_CRITICAL();
+    STAILQ_FOREACH(interface, &s_uac_driver->uac_ifaces_tailq, tailq_entry) {
+        if (vid == interface->dev_info.VID && pid == interface->dev_info.PID) {
+            UAC_EXIT_CRITICAL();
+            return interface->parent;
+        }
+    }
+    UAC_EXIT_CRITICAL();
+    return NULL;
+}
 
 /**
  * @brief Get UAC Interface pointer by Interface number
@@ -336,6 +350,22 @@ static uac_iface_t *get_interface_by_addr(uint8_t addr, uint8_t iface_num)
     UAC_ENTER_CRITICAL();
     STAILQ_FOREACH(interface, &s_uac_driver->uac_ifaces_tailq, tailq_entry) {
         if (addr == interface->dev_info.addr && iface_num == interface->dev_info.iface_num) {
+            UAC_EXIT_CRITICAL();
+            return interface;
+        }
+    }
+
+    UAC_EXIT_CRITICAL();
+    return NULL;
+}
+
+static uac_iface_t *get_interface_by_vid_pid(uint16_t vid, uint16_t pid, uint8_t iface_num)
+{
+    uac_iface_t *interface = NULL;
+
+    UAC_ENTER_CRITICAL();
+    STAILQ_FOREACH(interface, &s_uac_driver->uac_ifaces_tailq, tailq_entry) {
+        if (vid == interface->dev_info.VID && pid == interface->dev_info.PID && iface_num == interface->dev_info.iface_num) {
             UAC_EXIT_CRITICAL();
             return interface;
         }
@@ -1788,6 +1818,59 @@ fail:
         vRingbufferDelete(uac_iface->ringbuf);
     }
     return ret;
+}
+
+esp_err_t uac_host_device_open_with_vid_pid(uint16_t vid, uint16_t pid, const uac_host_device_config_t *config, uac_host_device_handle_t *uac_dev_handle)
+{
+    UAC_RETURN_ON_INVALID_ARG(uac_dev_handle);
+    UAC_RETURN_ON_INVALID_ARG(config);
+    *uac_dev_handle = NULL;
+
+    UAC_RETURN_ON_FALSE(s_uac_driver, ESP_ERR_INVALID_STATE, "UAC Driver is not installed");
+    //todo: support any vid/pid ?
+    UAC_RETURN_ON_FALSE(vid, ESP_ERR_INVALID_ARG, "Invalid vendor ID");
+    UAC_RETURN_ON_FALSE(pid, ESP_ERR_INVALID_ARG, "Invalid product ID");
+
+    // check if the device is already opened
+    *uac_dev_handle = get_interface_by_vid_pid(vid, pid, config->iface_num);
+    if (*uac_dev_handle) {
+        ESP_LOGI(TAG, "Device VID %04X, PID %04X already opened", vid, pid);
+        return ESP_OK;
+    }
+
+    // check all connected devices
+    int actual_count = 0;
+    uint8_t dev_addr_list[3] = {0};
+    usb_host_device_addr_list_fill(3, dev_addr_list, &actual_count);
+    if (actual_count == 0) {
+        ESP_LOGW(TAG, "No devices connected");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    for (int i = 0; i < actual_count; i++) {
+        const usb_device_desc_t *dev_desc = NULL;
+        usb_device_handle_t dev_hdl = NULL;
+        uac_device_t *uac_dev = get_uac_device_by_vid_pid(vid, pid);
+        uac_host_device_config_t config_copy = *config;
+        config_copy.addr = dev_addr_list[i];
+        if (uac_dev) {
+            ESP_LOGI(TAG, "Device VID %04X, PID %04X already opened", vid, pid);
+            return uac_host_device_open(&config_copy, uac_dev_handle);
+        } else {
+            UAC_RETURN_ON_ERROR(usb_host_device_open(s_uac_driver->client_handle, dev_addr_list[i], &dev_hdl), "Unable to open USB device");
+            UAC_RETURN_ON_ERROR(usb_host_get_device_descriptor(dev_hdl, &dev_desc), "Unable to get device descriptor");
+            ESP_LOGI(TAG, "Found Device VID %04X, PID %04X", dev_desc->idVendor, dev_desc->idProduct);
+            printf("expected VID %04X, PID %04X\n", vid, pid);
+            if (dev_desc->idVendor == vid && dev_desc->idProduct == pid) {
+                usb_host_device_close(s_uac_driver->client_handle, dev_hdl);
+                printf("Open Device addr %d\n", config_copy.addr);
+                return uac_host_device_open(&config_copy, uac_dev_handle);
+            }
+            usb_host_device_close(s_uac_driver->client_handle, dev_hdl);
+        }
+    }
+
+    return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t uac_host_device_close(uac_host_device_handle_t uac_dev_handle)
