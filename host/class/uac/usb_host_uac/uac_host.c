@@ -109,6 +109,7 @@ typedef enum {
     UAC_INTERFACE_STATE_IDLE,                       /*!< UAC Interface has been opened but not started */
     UAC_INTERFACE_STATE_READY,                      /*!< UAC Interface has started but stream is suspended */
     UAC_INTERFACE_STATE_ACTIVE,                     /*!< UAC Interface is streaming */
+    UAC_INTERFACE_STATE_SUSPENDING,                 /*!< UAC Interface is suspending */
     UAC_INTERFACE_STATE_MAX
 } uac_iface_state_t;
 
@@ -1216,6 +1217,7 @@ static esp_err_t uac_host_interface_suspend(uac_iface_t *iface)
     UAC_RETURN_ON_INVALID_ARG(iface->free_xfer_list);
     UAC_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
     UAC_RETURN_ON_FALSE((UAC_INTERFACE_STATE_ACTIVE == iface->state), ESP_ERR_INVALID_STATE, "Interface wrong state");
+    iface->state = UAC_INTERFACE_STATE_SUSPENDING;
 
     // Set Interface alternate setting to 0
     usb_setup_packet_t request;
