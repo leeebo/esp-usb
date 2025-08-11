@@ -251,6 +251,8 @@ static esp_err_t cdc_acm_start(cdc_dev_t *cdc_dev, cdc_acm_host_dev_callback_t e
     cdc_dev->cb_arg = user_arg;
     CDC_ACM_EXIT_CRITICAL();
 
+    printf("claiming interface %d - alternate %d\n", cdc_dev->data.intf_desc->bInterfaceNumber, cdc_dev->data.intf_desc->bAlternateSetting);
+
     // Claim data interface and start polling its IN endpoint
     ESP_GOTO_ON_ERROR(
         usb_host_interface_claim(
@@ -657,13 +659,18 @@ static bool cdc_acm_is_cdc_compliant(const usb_device_desc_t *device_desc, const
                     (iad_desc->bInterfaceCount == 2) &&
                     (iad_desc->bFunctionClass == USB_CLASS_COMM)) {
                 // 1. This is a composite device, that uses Interface Association Descriptor
+                printf("Found IAD descriptor for CDC device\n");
                 return true;
             }
         };
-    } else if ((device_desc->bDeviceClass == USB_CLASS_COMM) && (intf_idx == 0)) {
+    }
+
+    if ((device_desc->bDeviceClass == USB_CLASS_COMM) && (intf_idx == 0)) {
         // 2. This is a Communication Device Class: Class defined in Device descriptor
         return true;
-    } else if (device_desc->bDeviceClass == USB_CLASS_PER_INTERFACE) {
+    }
+
+    if (device_desc->bDeviceClass == USB_CLASS_PER_INTERFACE) {
         const usb_intf_desc_t *intf_desc = usb_parse_interface_descriptor(config_desc, intf_idx, 0, NULL);
         if (intf_desc->bInterfaceClass == USB_CLASS_COMM) {
             // 3. This is a Communication Device Class: Class defined in Interface descriptor
@@ -706,6 +713,7 @@ static void cdc_acm_parse_functional_descriptors(cdc_dev_t *cdc_dev, const usb_i
         cdc_dev->cdc_func_desc[func_desc_cnt - 1] = cdc_desc;
     } while (1);
     cdc_dev->num_cdc_func_desc = func_desc_cnt;
+    printf("Found %d functional descriptors\n", func_desc_cnt);
 }
 
 /**
@@ -748,6 +756,7 @@ static esp_err_t cdc_acm_parse_interface(cdc_dev_t *cdc_dev, uint8_t intf_idx, c
         if (USB_EP_DESC_GET_XFERTYPE(this_ep) == USB_TRANSFER_TYPE_INTR) {
             cdc_dev->notif.intf_desc = first_intf_desc;
             *notif_ep = this_ep;
+            printf("Found INTR EP 0x%02x interface %d \n", this_ep->bEndpointAddress, intf_idx);
         } else if (USB_EP_DESC_GET_XFERTYPE(this_ep) == USB_TRANSFER_TYPE_BULK) {
             cdc_dev->data.intf_desc = first_intf_desc;
             if (USB_EP_DESC_GET_EP_DIR(this_ep)) {
@@ -782,8 +791,10 @@ static esp_err_t cdc_acm_parse_interface(cdc_dev_t *cdc_dev, uint8_t intf_idx, c
                         cdc_dev->data.intf_desc = second_intf_desc;
                         if (USB_EP_DESC_GET_EP_DIR(this_ep)) {
                             *in_ep = this_ep;
+                            printf("Found Bulk IN endpoint 0x%02x interface %d \n", this_ep->bEndpointAddress, intf_idx + 1);
                         } else {
                             *out_ep = this_ep;
+                            printf("Found Bulk OUT endpoint 0x%02x interface %d \n", this_ep->bEndpointAddress, intf_idx + 1);
                         }
                     }
                     desc_offset = temp_offset;
@@ -811,7 +822,10 @@ esp_err_t cdc_acm_host_open(uint16_t vid, uint16_t pid, uint8_t interface_idx, c
     if (ESP_OK != ret) {
         goto exit;
     }
-
+    // if log level is set to debug, print all descriptors
+#if CONFIG_LOG_DEFAULT_LEVEL > 3
+    cdc_acm_host_desc_print(cdc_dev);
+#endif
     // Find and save relevant interface and endpoint descriptors
     const usb_ep_desc_t *notif_ep = NULL;
     const usb_ep_desc_t *in_ep = NULL;
@@ -1078,6 +1092,8 @@ static void notif_xfer_cb(usb_transfer_t *transfer)
             }
             break;
         }
+        case USB_CDC_NOTIF_CONNECTION_SPEED_CHANGE:
+            break;
         case USB_CDC_NOTIF_RESPONSE_AVAILABLE: // Encapsulated commands not implemented - fallthrough
         default:
             ESP_LOGW("CDC_ACM", "Unsupported notification type 0x%02X", notif->bNotificationCode);

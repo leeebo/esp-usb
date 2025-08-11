@@ -1,3 +1,8 @@
+## 2.0.5
+
+- Fix compatibility check to allow devices with CDC interfaces no interface association descriptor (IAD) to be opened
+
+
 ## 2.0.4
 
 - Fixed Control transfer allocation size for too small EP0 Max Packet Size (https://github.com/espressif/esp-idf/issues/14345)
